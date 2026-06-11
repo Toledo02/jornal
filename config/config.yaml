@@ -1,0 +1,72 @@
+weather:
+  city: "Curitiba"
+  lat: -25.4284
+  lon: -49.2733
+
+finance:
+  awesomeapi_pair: "USD-BRL"
+  scrape_targets:
+    - name: "InfoMoney Mercados"
+      url: "https://www.infomoney.com.br/mercados/"
+      use_playwright: false
+      selectors:
+        headlines: "h2 a, h3 a"
+        max_items: 5
+
+rss_feeds:
+  tech:
+    - "https://techcrunch.com/feed/"
+    - "https://www.tabnews.com.br/rss"
+  world:
+    - "https://g1.globo.com/rss/g1/mundo/"
+    - "https://feeds.bbci.co.uk/news/world/rss.xml"
+  gaming:
+    - "https://feeds.feedburner.com/ign/all"
+
+rss:
+  entries_per_feed: 5
+  world_min_entries: 10
+
+github:
+  trending_url: "https://github.com/trending"
+  trending_languages:
+    - "python"
+    - ""
+  max_repos: 5
+
+gaming:
+  cheapshark:
+    enabled: true
+    max_deals: 5
+    max_price: 0
+  include_rss: true
+
+football:
+  teams:
+    - "Athletico Paranaense"
+    - "Brazil"
+  sources:
+    ge:
+      base_url: "https://ge.globo.com"
+      team_slugs:
+        Athletico Paranaense: "futebol/times/atletico-pr"
+        Brazil: "futebol/selecao-brasileira"
+      selectors:
+        next_match: ".agenda-jogos__item, .proximos-jogos"
+        last_match: ".resultado-jogos__item, .ultimos-jogos"
+        match_items: "div, section"
+
+promotions:
+  drop_threshold_percent: 5
+  history_file: "promotions_history.json"
+  products: []
+
+orchestrator:
+  scraper_timeout_seconds: 30
+  continue_on_scraper_failure: true
+  min_sections_for_send: 1
+  request_timeout_seconds: 15
+
+logging:
+  level: "INFO"
+  directory: "logs"
