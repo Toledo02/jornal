@@ -35,7 +35,7 @@ def _split_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
     return chunks
 
 
-def send_message(text: str, settings, parse_mode: str | None = "Markdown") -> list[dict[str, Any]]:
+def send_message(text: str, settings, parse_mode: str | None = "HTML") -> list[dict[str, Any]]:
     token = settings.telegram_bot_token
     chat_id = settings.telegram_chat_id
 
@@ -71,7 +71,7 @@ def send_message(text: str, settings, parse_mode: str | None = "Markdown") -> li
 def send_journal(text: str, settings) -> list[dict[str, Any]]:
     try:
         # Tenta enviar formatado bonitinho primeiro
-        return send_message(text, settings, parse_mode="Markdown")
+        return send_message(text, settings, parse_mode="HTML")
     except RuntimeError:
         logger.warning("Markdown send failed; retrying without parse_mode (plain text)")
         # Se falhar por causa de um asterisco solto, envia como texto puro!
