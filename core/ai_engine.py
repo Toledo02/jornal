@@ -120,6 +120,8 @@ def generate_journal(payload: dict[str, Any], settings) -> str:
             content = (response.text or "").strip()
             if not content:
                 raise ValueError("Resposta vazia do Gemini")
+
+            content = content.replace("<br>", "\n").replace("<br/>", "\n").replace("</br>", "\n")
             return content
             
         except Exception as exc:
