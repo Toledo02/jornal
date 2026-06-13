@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
+import time
 
 # Importa o SDK oficial do Google GenAI
 from google import genai
@@ -95,26 +96,33 @@ def generate_journal(payload: dict[str, Any], settings) -> str:
         return _fallback_journal(payload, settings)
 
     user_prompt = _build_user_prompt(payload, settings)
+    
+    max_retries = 3
+    retry_delay = 10  # segundos de espera entre tentativas
 
-    try:
-        # Inicializa o cliente nativo do Gemini
-        client = genai.Client(api_key=settings.openai_api_key)
-        
-        # Faz a chamada oficial mapeando o system_instruction corretamente
-        response = client.models.generate_content(
-            model=settings.openai_model,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=settings.openai_temperature,
-            ),
-        )
-        
-        content = (response.text or "").strip()
-        if not content:
-            raise ValueError("Resposta vazia do Gemini")
-        return content
-        
-    except Exception as exc:
-        logger.error("Falha na geração do jornal via SDK oficial do Gemini: %s", exc)
-        return _fallback_journal(payload, settings)
+    for attempt in range(1, max_retries + 1):
+        try:
+            client = genai.Client(api_key=settings.openai_api_key)
+            
+            response = client.models.generate_content(
+                model=settings.openai_model,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=settings.openai_temperature,
+                ),
+            )
+            
+            content = (response.text or "").strip()
+            if not content:
+                raise ValueError("Resposta vazia do Gemini")
+            return content
+            
+        except Exception as exc:
+            logger.warning(f"Tentativa {attempt}/{max_retries} falhou via Gemini: {exc}")
+            if attempt < max_retries:
+                logger.info(f"Aguardando {retry_delay} segundos antes de tentar novamente...")
+                time.sleep(retry_delay)
+            else:
+                logger.error("Todas as tentativas de geração via Gemini falharam.")
+                return _fallback_journal(payload, settings)
