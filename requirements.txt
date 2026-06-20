@@ -1,9 +1,9 @@
 pyyaml
 python-dotenv
-requests
+httpx
 feedparser
 beautifulsoup4
-openai
 lxml
 tzdata
 google-genai
+yfinance

@@ -9,9 +9,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 import time
 
-# Importa o SDK oficial do Google GenAI
 from google import genai
 from google.genai import types
+
+from core.utils import format_date_pt_br
 
 logger = logging.getLogger(__name__)
 
@@ -24,32 +25,44 @@ Rules:
    - Use <b>text</b> for bold elements.
    - Use <i>text</i> for italics.
    - Never use Markdown asterisks (*) or underscores (_).
-   - CRITICAL: Never use <br> or <p> tags for line breaks. Telegram HTML does not support them. To separate sections, simply use literal blank lines (newlines / \n\n). ALWAYS add two blank lines before starting a new section emoji to prevent text crowding.
+   - CRITICAL: Never use <br> or <p> tags for line breaks. Telegram HTML does not support them. To separate sections, simply use literal blank lines (newlines / \\n\\n). ALWAYS add two blank lines before starting a new section emoji to prevent text crowding.
 2. Write in pt-BR with a clear, informative tone.
-3. Structure the journal with clear section headers.
+3. Start the journal with the EXACT date header provided in metadata.date_header_pt_br. Copy it verbatim as the first line — do not invent or alter the date.
+4. Structure the journal with clear section headers.
    - 🌦️ Clima
-   - 💵 Economia & Investimentos
-   - 💻 Tecnologia & Dev (top 5 tech news + GitHub trending repos)
+   - 💵 Economia & Investimentos: Include USD, EUR, ARS, BTC and IBOVESPA previous close when available.
+     * CRITICAL: ALWAYS present these values (quotes and variations/closes) as bullet points, never as running/continuous text.
+   - 💻 Tecnologia & Dev (top tech news + GitHub trending repos)
    - 🌍 Mundo (EXACTLY 3 most relevant global facts: wars, macroeconomics, historic events; ignore clickbait)
    - 🎮 Gaming (free/cheap deals + relevant gaming news)
    - ⚽ Futebol (next matches and last results for configured teams)
    - 🛒 Achados & Promoções (price changes and alerts)
-4. For world news, strictly select only the 3 most relevant global stories from the provided headlines.
-5. Omit sections that failed completely (_error). For partial sections (_warning), include available data briefly.
-6. Keep the full message between 1500-2500 characters when possible.
-7. Do not invent facts not present in the input data.
-8. Do not wrap the output in code fences.
+   - 📚 Neste Dia na História (one concise, interesting historical fact for today's day and month, from your own knowledge)
+5. CRITICAL LINKS RULE: Do NOT add embedded links in World (Mundo), Technology (Tecnologia, except GitHub Trending) or Economy (Economia) news. Those sections must be pure, direct text for clean reading. HTML links (<a href="URL">Text</a>) must be used EXCLUSIVELY in the following sections:
+   - Gaming / Achados & Promoções: Use links so the user can click and redeem the free/cheap game or offer (e.g. <a href="URL">Jogo</a> or <a href="URL">Oferta</a>).
+   - GitHub Trending: Add the link ONLY at the end of the description of each repository (exactly in the format: "...descrição do repo. <a href="URL">[Ver Repo]</a>").
+   - There must NOT be any loose links in the text or links in sections not listed above.
+6. For world news, strictly select only the 3 most relevant global stories from the provided headlines.
+7. Omit sections that failed completely (_error). For partial sections (_warning), include available data briefly.
+8. Keep the full message between 1500-2500 characters when possible.
+9. Do not invent facts not present in the input data, EXCEPT for the "Neste Dia na História" section which uses your historical knowledge for the current calendar day/month.
+10. Do not wrap the output in code fences.
 """
 
 
 def _build_user_prompt(payload: dict[str, Any], settings) -> str:
     city = settings.get("weather", "city", default="")
     now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    date_header = format_date_pt_br(now)
     meta = {
         "date": now.strftime("%Y-%m-%d"),
+        "date_header_pt_br": date_header,
         "time": now.strftime("%H:%M"),
         "timezone": "America/Sao_Paulo",
         "city": city,
+        "instruction": (
+            f"Use EXACTLY this string as the journal header (first line): {date_header}"
+        ),
         "failed_sections": [
             section for section, data in payload.items() if isinstance(data, dict) and data.get("_error")
         ],

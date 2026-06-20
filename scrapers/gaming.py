@@ -1,14 +1,13 @@
-"""Gaming deals, RSS headlines, and GitHub trending."""
+"""Gaming deals, RSS headlines, and global GitHub trending."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-import requests
 from bs4 import BeautifulSoup
 
-from core.utils import ScraperResult, request_timeout
+from core.utils import ScraperResult, http_get_json, http_get_text
 from scrapers import news_rss
 
 logger = logging.getLogger(__name__)
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 CHEAPSHARK_URL = "https://www.cheapshark.com/api/1.0/deals"
 
 
-def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
+async def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
     gaming_cfg = settings.get("gaming") or {}
     cheapshark_cfg = gaming_cfg.get("cheapshark") or {}
     if not cheapshark_cfg.get("enabled", True):
@@ -27,9 +26,7 @@ def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
         "pageSize": cheapshark_cfg.get("max_deals", 5),
         "sortBy": "Recent",
     }
-    response = requests.get(CHEAPSHARK_URL, params=params, timeout=request_timeout(settings))
-    response.raise_for_status()
-    deals = response.json()
+    deals = await http_get_json(CHEAPSHARK_URL, settings, params=params)
 
     results: list[dict[str, Any]] = []
     for deal in deals[: params["pageSize"]]:
@@ -45,57 +42,48 @@ def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
     return results
 
 
-def _fetch_github_trending(settings) -> list[dict[str, str]]:
+async def _fetch_github_trending(settings) -> list[dict[str, str]]:
     github_cfg = settings.get("github") or {}
-    base_url = github_cfg.get("trending_url", "https://github.com/trending")
-    languages = github_cfg.get("trending_languages") or [""]
+    url = github_cfg.get("trending_url", "https://github.com/trending")
     max_repos = int(github_cfg.get("max_repos", 5))
 
-    repos: list[dict[str, str]] = []
-    for language in languages:
-        url = f"{base_url}/{language}" if language else base_url
-        response = requests.get(
-            url,
-            timeout=request_timeout(settings),
-            headers={"User-Agent": "Mozilla/5.0 (compatible; DailyJournalBot/1.0)"},
-        )
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "lxml")
+    html = await http_get_text(url, settings)
+    soup = BeautifulSoup(html, "lxml")
 
-        for article in soup.select("article.Box-row"):
-            title_el = article.select_one("h2 a")
-            if not title_el:
-                continue
-            name = title_el.get_text(strip=True).replace("\n", " ").strip()
-            href = title_el.get("href", "")
-            desc_el = article.select_one("p")
-            repos.append(
-                {
-                    "name": name,
-                    "url": f"https://github.com{href}",
-                    "description": desc_el.get_text(strip=True) if desc_el else "",
-                    "language_filter": language or "all",
-                }
-            )
-            if len(repos) >= max_repos:
-                return repos
+    repos: list[dict[str, str]] = []
+    for article in soup.select("article.Box-row"):
+        title_el = article.select_one("h2 a")
+        if not title_el:
+            continue
+        name = title_el.get_text(strip=True).replace("\n", " ").strip()
+        href = title_el.get("href", "")
+        desc_el = article.select_one("p")
+        repos.append(
+            {
+                "name": name,
+                "url": f"https://github.com{href}",
+                "description": desc_el.get_text(strip=True) if desc_el else "",
+            }
+        )
+        if len(repos) >= max_repos:
+            break
     return repos
 
 
-def fetch(settings) -> ScraperResult:
+async def fetch(settings) -> ScraperResult:
     section = "gaming"
     gaming_cfg = settings.get("gaming") or {}
     data: dict[str, Any] = {"deals": [], "news": [], "github_trending": []}
     errors: list[str] = []
 
     try:
-        data["deals"] = _fetch_cheapshark_deals(settings)
+        data["deals"] = await _fetch_cheapshark_deals(settings)
     except Exception as exc:
         logger.warning("CheapShark fetch failed: %s", exc)
         errors.append(f"CheapShark: {exc}")
 
     if gaming_cfg.get("include_rss", True):
-        rss_result = news_rss.fetch(settings, category="gaming")
+        rss_result = await news_rss.fetch(settings, category="gaming")
         if rss_result.status == "error":
             errors.append(rss_result.error or "gaming RSS failed")
         else:
@@ -104,7 +92,7 @@ def fetch(settings) -> ScraperResult:
                 errors.append(rss_result.error)
 
     try:
-        data["github_trending"] = _fetch_github_trending(settings)
+        data["github_trending"] = await _fetch_github_trending(settings)
     except Exception as exc:
         logger.warning("GitHub trending fetch failed: %s", exc)
         errors.append(f"GitHub trending: {exc}")

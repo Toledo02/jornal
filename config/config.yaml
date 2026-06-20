@@ -4,7 +4,6 @@ weather:
   lon: -49.2733
 
 finance:
-  awesomeapi_pair: "USD-BRL"
   scrape_targets:
     - name: "InfoMoney Mercados"
       url: "https://www.infomoney.com.br/mercados/"
@@ -16,22 +15,21 @@ finance:
 rss_feeds:
   tech:
     - "https://techcrunch.com/feed/"
-    - "https://www.tabnews.com.br/rss"
+    - "https://www.theverge.com/rss/index.xml"
+    - "https://www.tabnews.com.br/recentes/rss"
   world:
     - "https://g1.globo.com/rss/g1/mundo/"
     - "https://feeds.bbci.co.uk/news/world/rss.xml"
+    - "https://admin.cnnbrasil.com.br/feed/"
   gaming:
     - "https://feeds.feedburner.com/ign/all"
 
 rss:
-  entries_per_feed: 5
-  world_min_entries: 10
+  entries_per_feed: 8
+  max_items_per_category: 15
 
 github:
   trending_url: "https://github.com/trending"
-  trending_languages:
-    - "python"
-    - ""
   max_repos: 5
 
 gaming:
@@ -59,7 +57,7 @@ football:
 promotions:
   drop_threshold_percent: 5
   history_file: "promotions_history.json"
-  products: []
+  product_names: []
 
 orchestrator:
   scraper_timeout_seconds: 30

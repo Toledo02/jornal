@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import logging
 
-import requests
-
-from core.utils import ScraperResult, request_timeout
+from core.utils import ScraperResult, http_get_json
 
 logger = logging.getLogger(__name__)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
 
-def fetch(settings) -> ScraperResult:
+async def fetch(settings) -> ScraperResult:
     section = "weather"
     weather_cfg = settings.get("weather") or {}
     city = weather_cfg.get("city", "Unknown")
@@ -36,13 +34,7 @@ def fetch(settings) -> ScraperResult:
     }
 
     try:
-        response = requests.get(
-            OPEN_METEO_URL,
-            params=params,
-            timeout=request_timeout(settings),
-        )
-        response.raise_for_status()
-        payload = response.json()
+        payload = await http_get_json(OPEN_METEO_URL, settings, params=params)
         daily = payload.get("daily", {})
 
         if not daily.get("time"):
@@ -57,6 +49,6 @@ def fetch(settings) -> ScraperResult:
         }
         return ScraperResult(section=section, status="ok", data=data)
 
-    except requests.RequestException as exc:
+    except Exception as exc:
         logger.warning("Weather fetch failed: %s", exc)
         return ScraperResult(section=section, status="error", error=str(exc))
