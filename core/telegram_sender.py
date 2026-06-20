@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import requests
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,10 @@ def send_message(text: str, settings, parse_mode: str | None = "HTML") -> list[d
         if parse_mode:
             payload["parse_mode"] = parse_mode
 
-        response = requests.post(url, json=payload, timeout=30)
+        response = httpx.post(url, json=payload, timeout=30)
         body = response.json()
         
-        if not response.ok or not body.get("ok"):
+        if not response.is_success or not body.get("ok"):
             logger.error("Telegram API error: %s", body)
             raise RuntimeError(f"Telegram send failed: {body}")
             

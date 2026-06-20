@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from typing import Callable
+from typing import Awaitable, Callable
 
 from config.settings import load_settings
 from core.ai_engine import generate_journal
@@ -13,7 +13,7 @@ from core.telegram_sender import send_journal
 from core.utils import ScraperResult, setup_logging
 from scrapers import finance, football, gaming, news_rss, promotions, weather
 
-ScraperFn = Callable[..., ScraperResult]
+ScraperFn = Callable[..., Awaitable[ScraperResult]]
 
 SCRAPERS: list[tuple[str, ScraperFn]] = [
     ("weather", weather.fetch),
@@ -26,10 +26,10 @@ SCRAPERS: list[tuple[str, ScraperFn]] = [
 ]
 
 
-def _run_scraper(name: str, fn: ScraperFn, settings) -> ScraperResult:
+async def _run_scraper(name: str, fn: ScraperFn, settings) -> ScraperResult:
     logger = logging.getLogger("journal")
     try:
-        result = fn(settings)
+        result = await fn(settings)
         logger.info("Scraper %s finished with status=%s", name, result.status)
         return result
     except Exception as exc:
@@ -37,24 +37,28 @@ def _run_scraper(name: str, fn: ScraperFn, settings) -> ScraperResult:
         return ScraperResult(section=name, status="error", error=str(exc))
 
 
-def _collect_data(settings) -> dict[str, ScraperResult]:
+async def _collect_data(settings) -> dict[str, ScraperResult]:
     logger = logging.getLogger("journal")
     timeout = int(settings.orchestrator.get("scraper_timeout_seconds", 30))
-    results: dict[str, ScraperResult] = {}
 
-    with ThreadPoolExecutor(max_workers=len(SCRAPERS)) as executor:
-        futures = {
-            name: executor.submit(_run_scraper, name, fn, settings) for name, fn in SCRAPERS
-        }
-        for name, future in futures.items():
-            try:
-                results[name] = future.result(timeout=timeout)
-            except FuturesTimeoutError:
-                logger.warning("Scraper %s timed out after %ss", name, timeout)
-                results[name] = ScraperResult(section=name, status="error", error=f"Timeout after {timeout}s")
-            except Exception as exc:
-                logger.warning("Scraper %s future failed: %s", name, exc)
-                results[name] = ScraperResult(section=name, status="error", error=str(exc))
+    tasks = {
+        name: asyncio.create_task(_run_scraper(name, fn, settings), name=name)
+        for name, fn in SCRAPERS
+    }
+
+    results: dict[str, ScraperResult] = {}
+    for name, task in tasks.items():
+        try:
+            results[name] = await asyncio.wait_for(task, timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Scraper %s timed out after %ss", name, timeout)
+            task.cancel()
+            results[name] = ScraperResult(
+                section=name, status="error", error=f"Timeout after {timeout}s"
+            )
+        except Exception as exc:
+            logger.warning("Scraper %s future failed: %s", name, exc)
+            results[name] = ScraperResult(section=name, status="error", error=str(exc))
 
     return results
 
@@ -67,12 +71,12 @@ def _successful_sections(results: dict[str, ScraperResult]) -> int:
     return sum(1 for result in results.values() if result.status in {"ok", "partial"})
 
 
-def main() -> int:
+async def _run_pipeline() -> int:
     settings = load_settings()
     logger = setup_logging(settings)
-    logger.info("Starting daily journal pipeline")
+    logger.info("Starting daily journal pipeline (async v2)")
 
-    results = _collect_data(settings)
+    results = await _collect_data(settings)
     ok_count = _successful_sections(results)
     min_sections = int(settings.orchestrator.get("min_sections_for_send", 1))
 
@@ -98,6 +102,10 @@ def main() -> int:
         return 1
 
     return 0
+
+
+def main() -> int:
+    return asyncio.run(_run_pipeline())
 
 
 if __name__ == "__main__":

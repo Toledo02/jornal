@@ -5,10 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import requests
 from bs4 import BeautifulSoup
 
-from core.utils import ScraperResult, request_timeout
+from core.utils import ScraperResult, http_get_text
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ def _parse_team_page(html: str, team_name: str, selectors: dict[str, str]) -> di
     }
 
 
-def _scrape_team(team_name: str, settings, ge_cfg: dict[str, Any]) -> dict[str, Any]:
+async def _scrape_team(team_name: str, settings, ge_cfg: dict[str, Any]) -> dict[str, Any]:
     base_url = ge_cfg.get("base_url", "https://ge.globo.com").rstrip("/")
     slugs = ge_cfg.get("team_slugs") or {}
     selectors = ge_cfg.get("selectors") or {}
@@ -55,16 +54,11 @@ def _scrape_team(team_name: str, settings, ge_cfg: dict[str, Any]) -> dict[str, 
         raise ValueError(f"No GE slug configured for team '{team_name}'")
 
     url = f"{base_url}/{slug.strip('/')}/"
-    response = requests.get(
-        url,
-        timeout=request_timeout(settings),
-        headers={"User-Agent": "Mozilla/5.0 (compatible; DailyJournalBot/1.0)"},
-    )
-    response.raise_for_status()
-    return _parse_team_page(response.text, team_name, selectors)
+    html = await http_get_text(url, settings)
+    return _parse_team_page(html, team_name, selectors)
 
 
-def fetch(settings) -> ScraperResult:
+async def fetch(settings) -> ScraperResult:
     section = "football"
     football_cfg = settings.get("football") or {}
     teams = football_cfg.get("teams") or []
@@ -78,7 +72,7 @@ def fetch(settings) -> ScraperResult:
 
     for team in teams:
         try:
-            team_data.append(_scrape_team(team, settings, ge_cfg))
+            team_data.append(await _scrape_team(team, settings, ge_cfg))
         except Exception as exc:
             logger.warning("Football scrape failed for %s: %s", team, exc)
             errors.append(f"{team}: {exc}")

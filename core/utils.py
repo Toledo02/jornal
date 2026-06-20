@@ -8,6 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
+
+USER_AGENT = "Mozilla/5.0 (compatible; DailyJournalBot/2.0)"
+DEFAULT_HEADERS = {"User-Agent": USER_AGENT}
+
 
 @dataclass
 class ScraperResult:
@@ -47,3 +52,58 @@ def setup_logging(settings) -> logging.Logger:
 
 def request_timeout(settings) -> int:
     return int(settings.get("orchestrator", "request_timeout_seconds", default=15))
+
+
+def _client_timeout(settings) -> httpx.Timeout:
+    return httpx.Timeout(request_timeout(settings))
+
+
+async def http_get(
+    url: str,
+    settings,
+    *,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+) -> httpx.Response:
+    merged_headers = {**DEFAULT_HEADERS, **(headers or {})}
+    async with httpx.AsyncClient(timeout=_client_timeout(settings), follow_redirects=True) as client:
+        response = await client.get(url, headers=merged_headers, params=params)
+        response.raise_for_status()
+        return response
+
+
+async def http_get_text(url: str, settings, **kwargs: Any) -> str:
+    response = await http_get(url, settings, **kwargs)
+    return response.text
+
+
+async def http_get_json(url: str, settings, **kwargs: Any) -> Any:
+    response = await http_get(url, settings, **kwargs)
+    return response.json()
+
+
+def format_date_pt_br(dt: datetime) -> str:
+    weekdays = (
+        "Segunda-feira",
+        "Terça-feira",
+        "Quarta-feira",
+        "Quinta-feira",
+        "Sexta-feira",
+        "Sábado",
+        "Domingo",
+    )
+    months = (
+        "Janeiro",
+        "Fevereiro",
+        "Março",
+        "Abril",
+        "Maio",
+        "Junho",
+        "Julho",
+        "Agosto",
+        "Setembro",
+        "Outubro",
+        "Novembro",
+        "Dezembro",
+    )
+    return f"{weekdays[dt.weekday()]}, {dt.day} de {months[dt.month - 1]} de {dt.year}"
