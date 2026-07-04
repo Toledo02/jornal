@@ -8,11 +8,33 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from core.utils import ScraperResult, http_get_json, http_get_text
-from scrapers import news_rss
 
 logger = logging.getLogger(__name__)
 
 CHEAPSHARK_URL = "https://www.cheapshark.com/api/1.0/deals"
+STORES_URL = "https://www.cheapshark.com/api/1.0/stores"
+
+
+async def _fetch_store_map(settings) -> dict[str, str]:
+    try:
+        stores = await http_get_json(STORES_URL, settings)
+        return {
+            store.get("storeID"): store.get("storeName")
+            for store in stores
+            if store.get("storeID") and store.get("storeName")
+        }
+    except Exception as exc:
+        logger.warning("Failed to fetch CheapShark stores dynamically: %s", exc)
+        return {
+            "1": "Steam",
+            "2": "GamersGate",
+            "3": "GreenManGaming",
+            "7": "GOG",
+            "11": "Humble Store",
+            "25": "Epic Games Store",
+            "32": "Microsoft Store",
+            "34": "Fanatical",
+        }
 
 
 async def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
@@ -21,24 +43,46 @@ async def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
     if not cheapshark_cfg.get("enabled", True):
         return []
 
+    store_map = await _fetch_store_map(settings)
+
     params = {
-        "upperPrice": cheapshark_cfg.get("max_price", 0),
-        "pageSize": cheapshark_cfg.get("max_deals", 5),
-        "sortBy": "Recent",
+        "sortBy": "Savings",
+        "pageSize": 60,
     }
+    if "max_price" in cheapshark_cfg:
+        params["upperPrice"] = cheapshark_cfg["max_price"]
+
     deals = await http_get_json(CHEAPSHARK_URL, settings, params=params)
 
+    min_savings = float(cheapshark_cfg.get("min_savings_percent", 90))
+    max_deals = int(cheapshark_cfg.get("max_deals", 5))
+
     results: list[dict[str, Any]] = []
-    for deal in deals[: params["pageSize"]]:
-        results.append(
-            {
-                "title": deal.get("title"),
-                "sale_price": deal.get("salePrice"),
-                "normal_price": deal.get("normalPrice"),
-                "store": deal.get("storeID"),
-                "url": f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID')}",
-            }
-        )
+    for deal in deals:
+        try:
+            sale_price = float(deal.get("salePrice") or 0.0)
+            savings = float(deal.get("savings") or 0.0)
+        except ValueError:
+            continue
+
+        is_free = (sale_price == 0.0)
+        is_high_savings = (savings >= min_savings)
+
+        if is_free or is_high_savings:
+            store_id = deal.get("storeID")
+            store_name = store_map.get(store_id, f"Loja {store_id}")
+            results.append(
+                {
+                    "title": deal.get("title"),
+                    "sale_price": deal.get("salePrice"),
+                    "normal_price": deal.get("normalPrice"),
+                    "savings": f"{savings:.1f}",
+                    "store": store_name,
+                    "url": f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID')}",
+                }
+            )
+            if len(results) >= max_deals:
+                break
     return results
 
 
@@ -72,8 +116,7 @@ async def _fetch_github_trending(settings) -> list[dict[str, str]]:
 
 async def fetch(settings) -> ScraperResult:
     section = "gaming"
-    gaming_cfg = settings.get("gaming") or {}
-    data: dict[str, Any] = {"deals": [], "news": [], "github_trending": []}
+    data: dict[str, Any] = {"deals": [], "github_trending": []}
     errors: list[str] = []
 
     try:
@@ -81,15 +124,6 @@ async def fetch(settings) -> ScraperResult:
     except Exception as exc:
         logger.warning("CheapShark fetch failed: %s", exc)
         errors.append(f"CheapShark: {exc}")
-
-    if gaming_cfg.get("include_rss", True):
-        rss_result = await news_rss.fetch(settings, category="gaming")
-        if rss_result.status == "error":
-            errors.append(rss_result.error or "gaming RSS failed")
-        else:
-            data["news"] = rss_result.data.get("items", [])
-            if rss_result.error:
-                errors.append(rss_result.error)
 
     try:
         data["github_trending"] = await _fetch_github_trending(settings)
