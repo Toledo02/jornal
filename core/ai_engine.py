@@ -34,12 +34,13 @@ Rules:
      * CRITICAL: ALWAYS present these values (quotes and variations/closes) as bullet points, never as running/continuous text.
    - 💻 Tecnologia & Dev (top tech news + GitHub trending repos)
    - 🌍 Mundo (EXACTLY 3 most relevant global facts: wars, macroeconomics, historic events; ignore clickbait)
-   - 🎮 Gaming (free/cheap deals + relevant gaming news)
+   - 🎬 Cultura Pop & Entretenimento: Seção focada estritamente em notícias (sem links). Regra de Curadoria: Ignore rumores irrelevantes, adiamentos de jogos menores ou fofocas de celebridades. Dê prioridade máxima para grandes blockbusters do cinema/streaming, novidades de animes, adaptações de livros de fantasia e atualizações de peso sobre cenários competitivos ou patches de MOBAs e jogos táticos.
+   - 🎮 Ofertas & Games Grátis: Seção focada em apresentar a lista gerada pelo scraper do CheapShark. Formatar cada item em tópicos, destacando os jogos 100% gratuitos ($0.00) e as promoções acima de 90% de desconto de forma clara, mantendo o link HTML <a href="URL">[Resgatar]</a> ou <a href="URL">[Ver Oferta]</a> no final de cada item.
    - ⚽ Futebol (next matches and last results for configured teams)
    - 🛒 Achados & Promoções (price changes and alerts)
    - 📚 Neste Dia na História (one concise, interesting historical fact for today's day and month, from your own knowledge)
-5. CRITICAL LINKS RULE: Do NOT add embedded links in World (Mundo), Technology (Tecnologia, except GitHub Trending) or Economy (Economia) news. Those sections must be pure, direct text for clean reading. HTML links (<a href="URL">Text</a>) must be used EXCLUSIVELY in the following sections:
-   - Gaming / Achados & Promoções: Use links so the user can click and redeem the free/cheap game or offer (e.g. <a href="URL">Jogo</a> or <a href="URL">Oferta</a>).
+5. CRITICAL LINKS RULE: Do NOT add embedded links in World (Mundo), Technology (Tecnologia, except GitHub Trending), Economy (Economia) or Cultura Pop & Entretenimento news. Those sections must be pure, direct text for clean reading. HTML links (<a href="URL">Text</a>) must be used EXCLUSIVELY in the following sections:
+   - Ofertas & Games Grátis / Achados & Promoções: Use links so the user can click and redeem the free/cheap game or offer (e.g. <a href="URL">[Resgatar]</a>, <a href="URL">[Ver Oferta]</a> or <a href="URL">Oferta</a>).
    - GitHub Trending: Add the link ONLY at the end of the description of each repository (exactly in the format: "...descrição do repo. <a href="URL">[Ver Repo]</a>").
    - There must NOT be any loose links in the text or links in sections not listed above.
 6. For world news, strictly select only the 3 most relevant global stories from the provided headlines.
@@ -47,10 +48,13 @@ Rules:
 8. Keep the full message between 1500-2500 characters when possible.
 9. Do not invent facts not present in the input data, EXCEPT for the "Neste Dia na História" section which uses your historical knowledge for the current calendar day/month.
 10. Do not wrap the output in code fences.
+11. ANTI-REPETITION POLICY:
+    - Você receberá o conteúdo do jornal gerado no dia anterior na tag <PREVIOUS_DAY_JOURNAL>.
+    - Compare as notícias de hoje com as de ontem. É ESTRITAMENTE PROIBIDO gerar a mesma notícia de ontem, a menos que haja um desdobramento significativo, atualização de impacto ou continuação de um evento em andamento (ex: novos dados sobre um desastre natural prolongado ou a conclusão de uma negociação previamente anunciada).
 """
 
 
-def _build_user_prompt(payload: dict[str, Any], settings) -> str:
+def _build_user_prompt(payload: dict[str, Any], settings, previous_journal_text: str | None = None) -> str:
     city = settings.get("weather", "city", default="")
     now = datetime.now(ZoneInfo("America/Sao_Paulo"))
     date_header = format_date_pt_br(now)
@@ -67,10 +71,16 @@ def _build_user_prompt(payload: dict[str, Any], settings) -> str:
             section for section, data in payload.items() if isinstance(data, dict) and data.get("_error")
         ],
     }
+
+    previous_context = ""
+    if previous_journal_text:
+        previous_context = f"\n\n<PREVIOUS_DAY_JOURNAL>\n{previous_journal_text.strip()}\n</PREVIOUS_DAY_JOURNAL>"
+
     return (
         "Create today's personal morning journal from this JSON payload.\n\n"
         f"Metadata:\n{json.dumps(meta, ensure_ascii=False, indent=2)}\n\n"
         f"Data:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        f"{previous_context}"
     )
 
 
@@ -95,7 +105,8 @@ def _fallback_journal(payload: dict[str, Any], settings) -> str:
     for section_key, emoji, title in [
         ("tech_news", "💻", "Tech"),
         ("world_news", "🌍", "Mundo"),
-        ("gaming", "🎮", "Gaming"),
+        ("pop_culture", "🎬", "Cultura Pop & Entretenimento"),
+        ("gaming", "🎮", "Ofertas & Games Grátis"),
         ("football", "⚽", "Futebol"),
         ("promotions", "🛒", "Promoções"),
     ]:
@@ -107,12 +118,12 @@ def _fallback_journal(payload: dict[str, Any], settings) -> str:
     return "\n".join(lines)
 
 
-def generate_journal(payload: dict[str, Any], settings) -> str:
+def generate_journal(payload: dict[str, Any], settings, previous_journal_text: str | None = None) -> str:
     if not settings.openai_api_key:
         logger.warning("Chave de API não configurada; usando fallback journal")
         return _fallback_journal(payload, settings)
 
-    user_prompt = _build_user_prompt(payload, settings)
+    user_prompt = _build_user_prompt(payload, settings, previous_journal_text)
     
     max_retries = 3
     retry_delay = 10  # segundos de espera entre tentativas

@@ -20,6 +20,7 @@ SCRAPERS: list[tuple[str, ScraperFn]] = [
     ("finance", finance.fetch),
     ("tech_news", lambda s: news_rss.fetch(s, category="tech")),
     ("world_news", lambda s: news_rss.fetch(s, category="world")),
+    ("pop_culture", lambda s: news_rss.fetch(s, category="pop_culture")),
     ("gaming", gaming.fetch),
     ("football", football.fetch),
     ("promotions", promotions.fetch),
@@ -91,12 +92,27 @@ async def _run_pipeline() -> int:
         return 1
 
     payload = _build_payload(results)
-    journal_text = generate_journal(payload, settings)
+
+    last_journal_file = settings.project_root / "logs" / "last_journal.txt"
+    previous_journal_text = ""
+    if last_journal_file.exists():
+        try:
+            previous_journal_text = last_journal_file.read_text(encoding="utf-8")
+            logger.info("Previous journal context loaded successfully")
+        except Exception as exc:
+            logger.warning("Failed to read previous journal file: %s", exc)
+
+    journal_text = generate_journal(payload, settings, previous_journal_text)
     logger.info("Journal generated (%s chars)", len(journal_text))
 
     try:
         send_journal(journal_text, settings)
         logger.info("Journal sent to Telegram successfully")
+        try:
+            last_journal_file.write_text(journal_text, encoding="utf-8")
+            logger.info("Current journal saved to last_journal.txt")
+        except Exception as exc:
+            logger.warning("Failed to save current journal: %s", exc)
     except Exception as exc:
         logger.error("Failed to send journal: %s", exc)
         return 1

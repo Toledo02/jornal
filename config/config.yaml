@@ -21,8 +21,11 @@ rss_feeds:
     - "https://g1.globo.com/rss/g1/mundo/"
     - "https://feeds.bbci.co.uk/news/world/rss.xml"
     - "https://admin.cnnbrasil.com.br/feed/"
-  gaming:
+  pop_culture:
+    - "https://www.omelete.com.br/rss"
+    - "https://jovemnerd.com.br/feed/"
     - "https://feeds.feedburner.com/ign/all"
+    - "https://www.polygon.com/rss/index.xml"
 
 rss:
   entries_per_feed: 8
@@ -35,9 +38,8 @@ github:
 gaming:
   cheapshark:
     enabled: true
-    max_deals: 5
-    max_price: 0
-  include_rss: true
+    max_deals: 7
+    min_savings_percent: 90
 
 football:
   teams:
