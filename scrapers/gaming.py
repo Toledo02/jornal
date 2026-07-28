@@ -1,18 +1,27 @@
-"""Gaming deals, RSS headlines, and global GitHub trending."""
+"""Game deals from CheapShark."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from bs4 import BeautifulSoup
-
-from core.utils import ScraperResult, http_get_json, http_get_text
+from core.utils import ScraperResult, http_get_json
 
 logger = logging.getLogger(__name__)
 
 CHEAPSHARK_URL = "https://www.cheapshark.com/api/1.0/deals"
 STORES_URL = "https://www.cheapshark.com/api/1.0/stores"
+
+FALLBACK_STORES = {
+    "1": "Steam",
+    "2": "GamersGate",
+    "3": "GreenManGaming",
+    "7": "GOG",
+    "11": "Humble Store",
+    "25": "Epic Games Store",
+    "32": "Microsoft Store",
+    "34": "Fanatical",
+}
 
 
 async def _fetch_store_map(settings) -> dict[str, str]:
@@ -25,19 +34,10 @@ async def _fetch_store_map(settings) -> dict[str, str]:
         }
     except Exception as exc:
         logger.warning("Failed to fetch CheapShark stores dynamically: %s", exc)
-        return {
-            "1": "Steam",
-            "2": "GamersGate",
-            "3": "GreenManGaming",
-            "7": "GOG",
-            "11": "Humble Store",
-            "25": "Epic Games Store",
-            "32": "Microsoft Store",
-            "34": "Fanatical",
-        }
+        return FALLBACK_STORES
 
 
-async def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
+async def _fetch_deals(settings) -> list[dict[str, Any]]:
     gaming_cfg = settings.get("gaming") or {}
     cheapshark_cfg = gaming_cfg.get("cheapshark") or {}
     if not cheapshark_cfg.get("enabled", True):
@@ -45,10 +45,12 @@ async def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
 
     store_map = await _fetch_store_map(settings)
 
-    params = {
-        "sortBy": "Savings",
-        "pageSize": 60,
-    }
+    params: dict[str, Any] = {"sortBy": "Savings", "pageSize": 60}
+    # Ordenar por desconto máximo seleciona shovelware: os 96% off costumam ser jogos que
+    # ninguém compra. A nota da Steam é o filtro que separa oferta de entulho.
+    min_rating = cheapshark_cfg.get("min_steam_rating")
+    if min_rating is not None:
+        params["steamRating"] = min_rating
     if "max_price" in cheapshark_cfg:
         params["upperPrice"] = cheapshark_cfg["max_price"]
 
@@ -58,87 +60,57 @@ async def _fetch_cheapshark_deals(settings) -> list[dict[str, Any]]:
     max_deals = int(cheapshark_cfg.get("max_deals", 5))
 
     results: list[dict[str, Any]] = []
+    seen_titles: set[str] = set()
+
     for deal in deals:
+        # O mesmo jogo aparece uma vez por loja; como a lista vem ordenada por desconto,
+        # a primeira ocorrência já é a melhor oferta.
+        title_key = (deal.get("title") or "").strip().lower()
+        if not title_key or title_key in seen_titles:
+            continue
+
         try:
             sale_price = float(deal.get("salePrice") or 0.0)
+            normal_price = float(deal.get("normalPrice") or 0.0)
             savings = float(deal.get("savings") or 0.0)
-        except ValueError:
+            rating = int(deal.get("steamRatingPercent") or 0)
+        except (TypeError, ValueError):
             continue
 
-        is_free = (sale_price == 0.0)
-        is_high_savings = (savings >= min_savings)
-
-        if is_free or is_high_savings:
-            store_id = deal.get("storeID")
-            store_name = store_map.get(store_id, f"Loja {store_id}")
-            results.append(
-                {
-                    "title": deal.get("title"),
-                    "sale_price": deal.get("salePrice"),
-                    "normal_price": deal.get("normalPrice"),
-                    "savings": f"{savings:.1f}",
-                    "store": store_name,
-                    "url": f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID')}",
-                }
-            )
-            if len(results) >= max_deals:
-                break
-    return results
-
-
-async def _fetch_github_trending(settings) -> list[dict[str, str]]:
-    github_cfg = settings.get("github") or {}
-    url = github_cfg.get("trending_url", "https://github.com/trending")
-    max_repos = int(github_cfg.get("max_repos", 5))
-
-    html = await http_get_text(url, settings)
-    soup = BeautifulSoup(html, "lxml")
-
-    repos: list[dict[str, str]] = []
-    for article in soup.select("article.Box-row"):
-        title_el = article.select_one("h2 a")
-        if not title_el:
+        if sale_price > 0.0 and savings < min_savings:
             continue
-        name = title_el.get_text(strip=True).replace("\n", " ").strip()
-        href = title_el.get("href", "")
-        desc_el = article.select_one("p")
-        repos.append(
+
+        seen_titles.add(title_key)
+        results.append(
             {
-                "name": name,
-                "url": f"https://github.com{href}",
-                "description": desc_el.get_text(strip=True) if desc_el else "",
+                "title": deal.get("title"),
+                "is_free": sale_price == 0.0,
+                "sale_price_usd": f"{sale_price:.2f}",
+                "normal_price_usd": f"{normal_price:.2f}",
+                "savings_percent": f"{savings:.0f}",
+                "steam_rating_percent": rating or None,
+                "store": store_map.get(deal.get("storeID"), f"Loja {deal.get('storeID')}"),
+                "url": f"https://www.cheapshark.com/redirect?dealID={deal.get('dealID')}",
             }
         )
-        if len(repos) >= max_repos:
+        if len(results) >= max_deals:
             break
-    return repos
+
+    return results
 
 
 async def fetch(settings) -> ScraperResult:
     section = "gaming"
-    data: dict[str, Any] = {"deals": [], "github_trending": []}
-    errors: list[str] = []
-
     try:
-        data["deals"] = await _fetch_cheapshark_deals(settings)
+        deals = await _fetch_deals(settings)
     except Exception as exc:
         logger.warning("CheapShark fetch failed: %s", exc)
-        errors.append(f"CheapShark: {exc}")
+        return ScraperResult(section=section, status="error", error=f"CheapShark: {exc}")
 
-    try:
-        data["github_trending"] = await _fetch_github_trending(settings)
-    except Exception as exc:
-        logger.warning("GitHub trending fetch failed: %s", exc)
-        errors.append(f"GitHub trending: {exc}")
-
-    has_data = any(data[key] for key in data)
-    if not has_data:
-        return ScraperResult(section=section, status="error", error="; ".join(errors) or "No gaming data")
-
-    status = "partial" if errors else "ok"
+    # Zero ofertas qualificadas é um resultado legítimo, não uma falha: alertar sobre isso
+    # todo dia treinaria você a ignorar os alertas.
     return ScraperResult(
         section=section,
-        status=status,
-        data=data,
-        error="; ".join(errors) if errors else None,
+        status="ok",
+        data={"deals": deals, "count": len(deals)},
     )

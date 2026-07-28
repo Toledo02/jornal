@@ -11,7 +11,7 @@ from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
 
-from core.utils import ScraperResult, http_get_text
+from core.utils import BROWSER_HEADERS, ScraperResult, http_get_text
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +20,23 @@ def _parse_price(text: str) -> float | None:
     cleaned = re.sub(r"[^\d,.]", "", text)
     if not cleaned:
         return None
+
     if "," in cleaned and "." in cleaned:
-        cleaned = cleaned.replace(".", "").replace(",", ".")
-    elif "," in cleaned:
-        cleaned = cleaned.replace(",", ".")
+        # O separador que aparece por último é o decimal — vale para "1.234,56" e "1,234.56".
+        decimal_sep = "," if cleaned.rfind(",") > cleaned.rfind(".") else "."
+        thousands_sep = "." if decimal_sep == "," else ","
+        cleaned = cleaned.replace(thousands_sep, "").replace(decimal_sep, ".")
+    else:
+        for separator in (",", "."):
+            if separator not in cleaned:
+                continue
+            head, _, tail = cleaned.rpartition(separator)
+            # "1.299" é mil duzentos e noventa e nove, não 1,299. Preço de varejo tem duas casas
+            # decimais, então três dígitos depois do separador significam milhar. Sem isso um
+            # produto de R$ 1.299 virava R$ 1,30 e disparava alerta de queda de 99%.
+            cleaned = cleaned.replace(separator, "" if head and len(tail) == 3 else ".")
+            break
+
     try:
         return float(cleaned)
     except ValueError:
@@ -52,7 +65,7 @@ def _slugify(name: str) -> str:
 
 async def _search_mercado_livre(product_name: str, settings) -> dict[str, Any] | None:
     url = f"https://lista.mercadolivre.com.br/{quote_plus(product_name)}"
-    html = await http_get_text(url, settings)
+    html = await http_get_text(url, settings, headers=BROWSER_HEADERS)
     soup = BeautifulSoup(html, "lxml")
 
     item = soup.select_one("li.ui-search-layout__item, div.ui-search-result")
@@ -78,7 +91,7 @@ async def _search_mercado_livre(product_name: str, settings) -> dict[str, Any] |
 
 async def _search_buscape(product_name: str, settings) -> dict[str, Any] | None:
     url = f"https://www.buscape.com.br/search?q={quote_plus(product_name)}"
-    html = await http_get_text(url, settings)
+    html = await http_get_text(url, settings, headers=BROWSER_HEADERS)
     soup = BeautifulSoup(html, "lxml")
 
     card = soup.select_one("[data-testid='product-card'], div[class*='ProductCard'], article")
@@ -150,11 +163,9 @@ async def fetch(settings) -> ScraperResult:
     product_names = _resolve_product_names(promo_cfg)
 
     if not product_names:
-        return ScraperResult(
-            section=section,
-            status="ok",
-            data={"products": [], "note": "No product_names configured for price monitoring"},
-        )
+        # Lista vazia é configuração deliberada, não falha: devolve vazio para o prompt omitir
+        # a seção, em vez de o jornal repetir "nenhuma promoção hoje" todo dia.
+        return ScraperResult(section=section, status="ok", data={"products": []})
 
     history_file = settings.project_root / promo_cfg.get("history_file", "promotions_history.json")
     history = _load_history(history_file)

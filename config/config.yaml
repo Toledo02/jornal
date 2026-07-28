@@ -22,14 +22,16 @@ rss_feeds:
     - "https://feeds.bbci.co.uk/news/world/rss.xml"
     - "https://admin.cnnbrasil.com.br/feed/"
   pop_culture:
-    - "https://www.omelete.com.br/rss"
-    - "https://jovemnerd.com.br/feed/"
-    - "https://feeds.feedburner.com/ign/all"
+    # Omelete e JovemNerd derrubaram o RSS público (404 desde 04/07/2026).
+    - "https://br.ign.com/feed.xml"
+    - "https://www.legiaodosherois.com.br/feed"
     - "https://www.polygon.com/rss/index.xml"
 
 rss:
-  entries_per_feed: 8
+  entries_per_feed: 6
   max_items_per_category: 15
+  # Descarta entradas mais velhas que isso. Entradas sem data no feed são mantidas.
+  max_age_hours: 30
 
 github:
   trending_url: "https://github.com/trending"
@@ -40,6 +42,8 @@ gaming:
     enabled: true
     max_deals: 7
     min_savings_percent: 90
+    # Nota mínima na Steam (%). Sem isso, "ordenar por maior desconto" só traz shovelware.
+    min_steam_rating: 70
 
 football:
   teams:
@@ -49,12 +53,26 @@ football:
     ge:
       base_url: "https://ge.globo.com"
       team_slugs:
-        Athletico Paranaense: "futebol/times/atletico-pr"
+        # URLs finais: o slug antigo passava por dois redirects 301 encadeados.
+        Athletico Paranaense: "pr/futebol/times/athletico-pr"
         Brazil: "futebol/selecao-brasileira"
       selectors:
-        next_match: ".agenda-jogos__item, .proximos-jogos"
-        last_match: ".resultado-jogos__item, .ultimos-jogos"
-        match_items: "div, section"
+        next_match: ".agenda-jogos__item, .proximos-jogos, .jogo__informacoes"
+        last_match: ".resultado-jogos__item, .ultimos-jogos, .placar"
+        # Manchetes recentes. NÃO usar seletor amplo como "div, section": ele casa com a
+        # página inteira e injeta o body todo no payload do LLM.
+        headlines: ".feed-post-link, .bastian-feed-item .feed-post-body-title"
+        max_headlines: 6
+      # Chamadas de engajamento que o GE mistura ao feed e não são notícia.
+      noise_patterns:
+        - "siga o canal"
+        - "vídeos curtos"
+        - "whatsapp"
+        - "assista ao vivo"
+        - "veja a tabela"
+        - "newsletter"
+        - "tudo sobre"
+        - "na globo, sportv"
 
 promotions:
   drop_threshold_percent: 5
@@ -64,7 +82,8 @@ promotions:
 orchestrator:
   scraper_timeout_seconds: 30
   continue_on_scraper_failure: true
-  min_sections_for_send: 1
+  # Com 9 fontes, enviar um jornal de uma seção só não vale a chamada ao LLM.
+  min_sections_for_send: 4
   request_timeout_seconds: 15
 
 logging:

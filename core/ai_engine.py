@@ -1,18 +1,16 @@
-"""LLM engine: consolidates raw scraper data into a Telegram-ready journal using official Gemini SDK."""
+"""LLM engine: consolidates raw scraper data into a Telegram-ready journal using the Gemini SDK."""
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
-from typing import Any
-from zoneinfo import ZoneInfo
 import time
+from typing import Any
 
 from google import genai
 from google.genai import types
 
-from core.utils import format_date_pt_br
+from core.utils import format_date_pt_br, now_local
 
 logger = logging.getLogger(__name__)
 
@@ -22,48 +20,84 @@ Your task is to transform raw JSON data from multiple sources into a concise dai
 
 Rules:
 1. Output ONLY the final journal text formatted in HTML compatible with Telegram.
-   - Use <b>text</b> for bold elements.
-   - Use <i>text</i> for italics.
-   - Never use Markdown asterisks (*) or underscores (_).
-   - CRITICAL: Never use <br> or <p> tags for line breaks. Telegram HTML does not support them. To separate sections, simply use literal blank lines (newlines / \\n\\n). ALWAYS add two blank lines before starting a new section emoji to prevent text crowding.
+   - Use <b>text</b> for bold and <i>text</i> for italics. No other formatting tags exist.
+   - Never use Markdown asterisks (*) or underscores (_) — they render literally in Telegram.
+   - Never use <br>, <p>, <ul> or <li>. Separate blocks with literal blank lines (\\n\\n).
+   - For bullet points use the character "•" at the start of the line. This is the ONLY
+     acceptable bullet marker; "*" and "-" are forbidden.
+   - Leave one blank line between a section header and its content, and two blank lines before
+     the next section emoji.
 2. Write in pt-BR with a clear, informative tone.
-3. Start the journal with the EXACT date header provided in metadata.date_header_pt_br. Copy it verbatim as the first line — do not invent or alter the date.
-4. Structure the journal with clear section headers.
+3. Start the journal with the EXACT date header provided in metadata.date_header_pt_br. Copy it
+   verbatim as the first line — do not invent or alter the date.
+4. SECTION STRUCTURE — use EXACTLY these sections, with these exact titles, in this exact order.
+   Never add, rename, remove, split or reorder a section. If a section has no data, omit it
+   entirely (see rule 7) rather than inventing a replacement.
    - 🌦️ Clima
-   - 💵 Economia & Investimentos: Include USD, EUR, ARS, BTC and IBOVESPA previous close when available.
-     * CRITICAL: ALWAYS present these values (quotes and variations/closes) as bullet points, never as running/continuous text.
-   - 💻 Tecnologia & Dev (top tech news + GitHub trending repos)
-   - 🌍 Mundo (EXACTLY 3 most relevant global facts: wars, macroeconomics, historic events; ignore clickbait)
-   - 🎬 Cultura Pop & Entretenimento: Seção focada estritamente em notícias (sem links). Regra de Curadoria: Ignore rumores irrelevantes, adiamentos de jogos menores ou fofocas de celebridades. Dê prioridade máxima para grandes blockbusters do cinema/streaming, novidades de animes, adaptações de livros de fantasia e atualizações de peso sobre cenários competitivos ou patches de MOBAs e jogos táticos.
-   - 🎮 Ofertas & Games Grátis: Seção focada em apresentar a lista gerada pelo scraper do CheapShark. Formatar cada item em tópicos, destacando os jogos 100% gratuitos ($0.00) e as promoções acima de 90% de desconto de forma clara, mantendo o link HTML <a href="URL">[Resgatar]</a> ou <a href="URL">[Ver Oferta]</a> no final de cada item.
-   - ⚽ Futebol (next matches and last results for configured teams)
-   - 🛒 Achados & Promoções (price changes and alerts)
-   - 📚 Neste Dia na História (one concise, interesting historical fact for today's day and month, from your own knowledge)
-5. CRITICAL LINKS RULE: Do NOT add embedded links in World (Mundo), Technology (Tecnologia, except GitHub Trending), Economy (Economia) or Cultura Pop & Entretenimento news. Those sections must be pure, direct text for clean reading. HTML links (<a href="URL">Text</a>) must be used EXCLUSIVELY in the following sections:
-   - Ofertas & Games Grátis / Achados & Promoções: Use links so the user can click and redeem the free/cheap game or offer (e.g. <a href="URL">[Resgatar]</a>, <a href="URL">[Ver Oferta]</a> or <a href="URL">Oferta</a>).
-   - GitHub Trending: Add the link ONLY at the end of the description of each repository (exactly in the format: "...descrição do repo. <a href="URL">[Ver Repo]</a>").
-   - There must NOT be any loose links in the text or links in sections not listed above.
-6. For world news, strictly select only the 3 most relevant global stories from the provided headlines.
-7. Omit sections that failed completely (_error). For partial sections (_warning), include available data briefly.
-8. Keep the full message between 1500-2500 characters when possible.
-9. Do not invent facts not present in the input data, EXCEPT for the "Neste Dia na História" section which uses your historical knowledge for the current calendar day/month.
+   - 💵 Economia & Investimentos
+   - 💻 Tecnologia & Dev
+   - 🌍 Mundo
+   - 🎬 Cultura Pop & Entretenimento
+   - 🎮 Ofertas & Games Grátis
+   - ⚽ Futebol
+   - 🛒 Achados & Promoções
+   - 📚 Neste Dia na História
+5. SECTION CONTENT:
+   - Economia: present USD, EUR, ARS, BTC and IBOVESPA as bullet points, never as running text.
+     Each asset carries a preformatted "display" field — copy that string EXACTLY. Never reformat
+     a number, never convert currency, and never compute a percentage yourself. If an asset has no
+     "display" field, omit that bullet.
+   - Tecnologia & Dev: top tech news, followed by the GitHub trending repositories.
+   - Mundo: EXACTLY 3 most relevant global facts (wars, macroeconomics, historic events). Ignore
+     clickbait.
+   - Cultura Pop: prioritise major film/streaming releases, anime, book adaptations and updates on
+     competitive scenes or MOBA/tactical game patches. Ignore rumours, minor delays and celebrity
+     gossip.
+   - Ofertas & Games Grátis: list the CheapShark deals as bullets, highlighting the free ones
+     (is_free = true) and the deepest discounts.
+   - Futebol: the data contains recent headlines WITHOUT explicit dates. Never write "ontem",
+     "hoje", "amanhã" or any relative time reference for football — you cannot know when those
+     events happened. Summarise them without dating them.
+   - Neste Dia na História: one concise historical fact for today's calendar day and month, from
+     your own knowledge.
+6. LINKS: HTML links (<a href="URL">Text</a>) are allowed EXCLUSIVELY in:
+   - Ofertas & Games Grátis and Achados & Promoções, as <a href="URL">[Resgatar]</a> or
+     <a href="URL">[Ver Oferta]</a> at the end of each item.
+   - GitHub Trending, as "...descrição do repo. <a href="URL">[Ver Repo]</a>".
+   No links anywhere else — Mundo, Tecnologia (news), Economia, Cultura Pop and Futebol must be
+   pure text. No loose URLs anywhere.
+7. OMITTING SECTIONS: omit entirely any section whose data failed (_error) or is empty (no items,
+   no deals, no products). Do not write "nenhuma oferta hoje" or similar filler — just leave the
+   section out. For partial sections (_warning), include the available data without commenting on
+   the failure.
+8. Target 2000-3500 characters total.
+9. Do not invent facts not present in the input data. The only exception is "Neste Dia na
+   História", which uses your own historical knowledge.
 10. Do not wrap the output in code fences.
 11. ANTI-REPETITION POLICY:
-    - Você receberá o conteúdo do jornal gerado no dia anterior na tag <PREVIOUS_DAY_JOURNAL>.
-    - Compare as notícias de hoje com as de ontem. É ESTRITAMENTE PROIBIDO gerar a mesma notícia de ontem, a menos que haja um desdobramento significativo, atualização de impacto ou continuação de um evento em andamento (ex: novos dados sobre um desastre natural prolongado ou a conclusão de uma negociação previamente anunciada).
+    - The tag <PREVIOUS_DAY_JOURNAL> contains yesterday's journal, when available.
+    - This policy applies ONLY to these news sections: Tecnologia & Dev, Mundo, Cultura Pop &
+      Entretenimento, and Futebol. Do not repeat a story already covered yesterday unless there is
+      a significant development, an impactful update, or the continuation of an ongoing event.
+    - This policy NEVER applies to Clima, Economia & Investimentos, Ofertas & Games Grátis,
+      Achados & Promoções or Neste Dia na História. Those are expected to look similar every day
+      and must ALWAYS be present regardless of yesterday's content. Never omit the weather or the
+      exchange rates because they resemble yesterday's.
 """
+
+# Erros que não melhoram com nova tentativa: modelo inexistente, chave inválida, prompt malformado.
+PERMANENT_ERROR_MARKERS = ("400", "401", "403", "404", "INVALID_ARGUMENT", "PERMISSION_DENIED")
 
 
 def _build_user_prompt(payload: dict[str, Any], settings, previous_journal_text: str | None = None) -> str:
-    city = settings.get("weather", "city", default="")
-    now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    now = now_local()
     date_header = format_date_pt_br(now)
     meta = {
         "date": now.strftime("%Y-%m-%d"),
         "date_header_pt_br": date_header,
         "time": now.strftime("%H:%M"),
         "timezone": "America/Sao_Paulo",
-        "city": city,
+        "city": settings.get("weather", "city", default=""),
         "instruction": (
             f"Use EXACTLY this string as the journal header (first line): {date_header}"
         ),
@@ -73,8 +107,10 @@ def _build_user_prompt(payload: dict[str, Any], settings, previous_journal_text:
     }
 
     previous_context = ""
-    if previous_journal_text:
-        previous_context = f"\n\n<PREVIOUS_DAY_JOURNAL>\n{previous_journal_text.strip()}\n</PREVIOUS_DAY_JOURNAL>"
+    if previous_journal_text and previous_journal_text.strip():
+        previous_context = (
+            f"\n\n<PREVIOUS_DAY_JOURNAL>\n{previous_journal_text.strip()}\n</PREVIOUS_DAY_JOURNAL>"
+        )
 
     return (
         "Create today's personal morning journal from this JSON payload.\n\n"
@@ -85,74 +121,100 @@ def _build_user_prompt(payload: dict[str, Any], settings, previous_journal_text:
 
 
 def _fallback_journal(payload: dict[str, Any], settings) -> str:
-    """Simple template when the LLM call fails."""
-    lines = ["*📰 Jornal Matinal (modo fallback)*", ""]
-    city = settings.get("weather", "city", default="")
+    """Jornal mínimo em texto puro, para quando o LLM não responde.
 
-    weather = payload.get("weather", {})
+    Sem marcação: a versão anterior usava asteriscos de Markdown e era enviada como HTML, então
+    os asteriscos apareciam literalmente na mensagem. Texto puro atravessa o sanitizador intacto.
+    """
+    lines = [format_date_pt_br(now_local()), "", "(modo fallback — o gerador de texto falhou)", ""]
+
+    weather = payload.get("weather") or {}
     if weather and not weather.get("_error"):
         lines.append(
-            f"🌦️ *Clima ({city})*: "
+            f"🌦️ Clima em {weather.get('city', '')}: "
             f"mín {weather.get('temp_min_c')}°C, máx {weather.get('temp_max_c')}°C, "
             f"chuva {weather.get('rain_probability_percent')}%"
         )
 
-    finance = payload.get("finance", {})
+    finance = payload.get("finance") or {}
     if finance and not finance.get("_error"):
-        quote = finance.get("usd_brl") or {}
-        lines.append(f"💵 *Dólar*: R$ {quote.get('bid', 'N/A')}")
+        quotes = [
+            f"{label}: {(finance.get(key) or {}).get('display')}"
+            for key, label in (
+                ("usd_brl", "Dólar"),
+                ("eur_brl", "Euro"),
+                ("btc_brl", "Bitcoin"),
+                ("ibovespa", "IBOVESPA"),
+            )
+            if (finance.get(key) or {}).get("display")
+        ]
+        if quotes:
+            lines.append("💵 " + " | ".join(quotes))
 
-    for section_key, emoji, title in [
-        ("tech_news", "💻", "Tech"),
-        ("world_news", "🌍", "Mundo"),
-        ("pop_culture", "🎬", "Cultura Pop & Entretenimento"),
-        ("gaming", "🎮", "Ofertas & Games Grátis"),
-        ("football", "⚽", "Futebol"),
-        ("promotions", "🛒", "Promoções"),
-    ]:
-        data = payload.get(section_key, {})
-        if not data or data.get("_error"):
+    for key, emoji, title, field in (
+        ("tech_news", "💻", "Tecnologia", "items"),
+        ("world_news", "🌍", "Mundo", "items"),
+        ("pop_culture", "🎬", "Cultura Pop", "items"),
+    ):
+        section = payload.get(key) or {}
+        items = section.get(field) or []
+        if not items:
             continue
-        lines.append(f"{emoji} *{title}*: dados coletados ({json.dumps(data, ensure_ascii=False)[:300]}...)")
+        lines.append("")
+        lines.append(f"{emoji} {title}")
+        lines.extend(f"• {item.get('title', '')}" for item in items[:4])
 
     return "\n".join(lines)
 
 
+def _is_permanent(error: Exception) -> bool:
+    message = str(error)
+    return any(marker in message for marker in PERMANENT_ERROR_MARKERS)
+
+
+def _generate_once(model: str, user_prompt: str, settings) -> str:
+    client = genai.Client(api_key=settings.llm_api_key)
+    response = client.models.generate_content(
+        model=model,
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=settings.llm_temperature,
+        ),
+    )
+    content = (response.text or "").strip()
+    if not content:
+        raise ValueError("Resposta vazia do Gemini")
+    return content
+
+
 def generate_journal(payload: dict[str, Any], settings, previous_journal_text: str | None = None) -> str:
-    if not settings.openai_api_key:
+    if not settings.llm_api_key:
         logger.warning("Chave de API não configurada; usando fallback journal")
         return _fallback_journal(payload, settings)
 
     user_prompt = _build_user_prompt(payload, settings, previous_journal_text)
-    
-    max_retries = 3
-    retry_delay = 10  # segundos de espera entre tentativas
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            client = genai.Client(api_key=settings.openai_api_key)
-            
-            response = client.models.generate_content(
-                model=settings.openai_model,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=settings.openai_temperature,
-                ),
-            )
-            
-            content = (response.text or "").strip()
-            if not content:
-                raise ValueError("Resposta vazia do Gemini")
+    # Um 503 do Gemini é sobrecarga do modelo e costuma durar minutos, não segundos: o intervalo
+    # fixo de 10s gastava as três tentativas em menos de um minuto e caía no fallback.
+    delays = [10, 30, 90]
+    models = [settings.llm_model, *settings.llm_fallback_models]
 
-            content = content.replace("<br>", "\n").replace("<br/>", "\n").replace("</br>", "\n")
-            return content
-            
-        except Exception as exc:
-            logger.warning(f"Tentativa {attempt}/{max_retries} falhou via Gemini: {exc}")
-            if attempt < max_retries:
-                logger.info(f"Aguardando {retry_delay} segundos antes de tentar novamente...")
-                time.sleep(retry_delay)
-            else:
-                logger.error("Todas as tentativas de geração via Gemini falharam.")
-                return _fallback_journal(payload, settings)
+    for model in models:
+        for attempt, delay in enumerate(delays, start=1):
+            try:
+                content = _generate_once(model, user_prompt, settings)
+                if model != settings.llm_model:
+                    logger.warning("Jornal gerado pelo modelo de reserva %s", model)
+                return content
+            except Exception as exc:
+                if _is_permanent(exc):
+                    logger.error("Erro permanente em %s, sem retry: %s", model, exc)
+                    break
+                logger.warning("Tentativa %s/%s falhou em %s: %s", attempt, len(delays), model, exc)
+                if attempt < len(delays):
+                    logger.info("Aguardando %ss antes de tentar novamente", delay)
+                    time.sleep(delay)
+
+    logger.error("Todas as tentativas de geração falharam; usando fallback")
+    return _fallback_journal(payload, settings)

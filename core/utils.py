@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+import html
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
-USER_AGENT = "Mozilla/5.0 (compatible; DailyJournalBot/2.0)"
+TIMEZONE = ZoneInfo("America/Sao_Paulo")
+
+# APIs públicas atrás de Cloudflare (CheapShark, entre outras) recusam User-Agent genérico ou
+# disfarçado de navegador e exigem identificação do cliente com um contato.
+USER_AGENT = "JornalMatinal/2.1 (+https://github.com/Toledo02/Jornal)"
 DEFAULT_HEADERS = {"User-Agent": USER_AGENT}
+
+# Alvos de scraping de HTML fazem o oposto: tendem a recusar tráfego declaradamente automatizado.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+BROWSER_HEADERS = {"User-Agent": BROWSER_USER_AGENT}
 
 
 @dataclass
@@ -37,7 +51,9 @@ def setup_logging(settings) -> logging.Logger:
     log_dir = settings.project_root / log_cfg.get("directory", "logs")
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    log_file = log_dir / f"journal_{datetime.now():%Y%m%d}.log"
+    # Data no fuso do jornal, não no do servidor: numa VPS em UTC o arquivo de log viraria o dia
+    # antes do jornal ser gerado.
+    log_file = log_dir / f"journal_{now_local():%Y%m%d}.log"
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -47,6 +63,12 @@ def setup_logging(settings) -> logging.Logger:
         ],
         force=True,
     )
+
+    # O httpx registra a URL completa de cada requisição em nível INFO, o que grava o token do bot
+    # do Telegram em texto puro dentro do arquivo de log.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     return logging.getLogger("journal")
 
 
@@ -80,6 +102,38 @@ async def http_get_text(url: str, settings, **kwargs: Any) -> str:
 async def http_get_json(url: str, settings, **kwargs: Any) -> Any:
     response = await http_get(url, settings, **kwargs)
     return response.json()
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def strip_html(text: str, *, keep_newlines: bool = False) -> str:
+    """Remove tags e resolve entidades HTML.
+
+    Usado nos `summary` de RSS (que chegam cheios de marcação e desperdiçam tokens do LLM) e no
+    fallback de texto puro do Telegram — nesse caso com `keep_newlines`, senão o jornal inteiro
+    viraria um parágrafo só.
+    """
+    if not text:
+        return ""
+    unescaped = html.unescape(_TAG_RE.sub(" ", text))
+    if keep_newlines:
+        return "\n".join(" ".join(line.split()) for line in unescaped.splitlines())
+    return " ".join(unescaped.split())
+
+
+def format_number_pt_br(value: float, decimals: int = 2) -> str:
+    """Formata no padrão brasileiro: 329233.4 -> '329.233,40'.
+
+    Feito em Python de propósito: formatação numérica é onde o LLM erra com mais frequência,
+    e cotação errada no jornal é pior que cotação ausente.
+    """
+    formatted = f"{value:,.{decimals}f}"
+    return formatted.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+def now_local() -> datetime:
+    return datetime.now(TIMEZONE)
 
 
 def format_date_pt_br(dt: datetime) -> str:
