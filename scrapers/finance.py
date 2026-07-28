@@ -55,6 +55,7 @@ def _quote_from_awesome(body: dict[str, Any], pair: str) -> dict[str, Any]:
         "pair": pair,
         "bid": quote.get("bid"),
         "ask": quote.get("ask"),
+        "variation_percent": quote.get("pctChange"),
         "timestamp": quote.get("create_date") or quote.get("timestamp"),
         "source": "awesomeapi",
     }
@@ -99,6 +100,7 @@ async def _fetch_hg_brasil(settings, missing: list[str]) -> dict[str, Any]:
                 "pair": f"{currency_code}-BRL",
                 "bid": currency.get("buy"),
                 "ask": currency.get("sell"),
+                "variation_percent": currency.get("variation"),
                 "source": "hgbrasil",
             }
 
@@ -201,7 +203,6 @@ async def _fetch_quotes(settings) -> tuple[dict[str, Any], list[str]]:
     ninguém consultava as demais e o jornal saía com "Bitcoin: cotação indisponível".
     """
     quotes: dict[str, Any] = {}
-    errors: list[str] = []
 
     for label, fetcher in SOURCES:
         missing = [key for key in ASSET_KEYS if not _has_value(quotes.get(key))]
@@ -211,8 +212,10 @@ async def _fetch_quotes(settings) -> tuple[dict[str, Any], list[str]]:
         try:
             fresh = await fetcher(settings, missing)
         except Exception as exc:
+            # Só log: uma fonte que falha mas é coberta pela seguinte não degrada o jornal, e
+            # alertar sobre ela todo dia (a AwesomeAPI está bloqueada há 47 dias) treinaria
+            # o leitor a ignorar os alertas. O que importa é o que ficou faltando no fim.
             logger.warning("%s fetch failed: %s", label, exc)
-            errors.append(f"{label}: {exc}")
             continue
 
         filled = [key for key in missing if _has_value(fresh.get(key))]
@@ -225,13 +228,53 @@ async def _fetch_quotes(settings) -> tuple[dict[str, Any], list[str]]:
         await _derive_btc_brl(quotes)
 
     still_missing = [key for key in ASSET_KEYS if not _has_value(quotes.get(key))]
-    if still_missing:
-        errors.append(f"sem cotação para: {', '.join(still_missing)}")
+    errors = [f"sem cotação para: {', '.join(still_missing)}"] if still_missing else []
 
     return quotes, errors
 
 
 # --------------------------------------------------------------------------- formatação
+
+
+def _fill_variation(quote: dict[str, Any]) -> None:
+    """Calcula a variação a partir do fechamento anterior quando a fonte não a informa."""
+    if quote.get("variation_percent") is not None or not quote.get("previous_close"):
+        return
+    try:
+        previous = float(quote["previous_close"])
+        quote["variation_percent"] = round((float(quote["bid"]) - previous) / previous * 100, 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+
+
+def _invert_variation(variation: Any) -> float | None:
+    """Variação do par invertido: se ARS-BRL sobe p%, o quanto 1 BRL compra em ARS cai.
+
+    Sem isso o peso apareceria subindo justamente nos dias em que enfraqueceu.
+    """
+    if variation is None:
+        return None
+    try:
+        value = float(variation)
+    except (TypeError, ValueError):
+        return None
+    return round(-value / (1 + value / 100), 2)
+
+
+def _variation_suffix(quote: dict[str, Any]) -> str:
+    """' (+0,10%)'. Sem isso o dólar parece congelado: 5,1288 e 5,116 arredondam para o
+    mesmo 'R$ 5,12' em dias seguidos, e a variação é justamente a informação do dia."""
+    variation = quote.get("variation_percent")
+    if variation is None:
+        return ""
+    try:
+        value = float(variation)
+    except (TypeError, ValueError):
+        return ""
+    # O sinal sai daqui, não da formatação do número: -0.0 (que surge ao inverter uma variação
+    # zero) é >= 0 em Python e produzia "+-0,00%".
+    sign = "+" if value > 0 else "-" if value < 0 else ""
+    return f" ({sign}{format_number_pt_br(abs(value), 2)}%)"
 
 
 def _decorate(quotes: dict[str, Any]) -> None:
@@ -240,22 +283,27 @@ def _decorate(quotes: dict[str, Any]) -> None:
     Formatação numérica e cálculo de variação são feitos aqui, em Python: entregar float cru ao
     modelo produzia "R$ 0.0034278" e percentuais inventados por aritmética dele.
     """
-    for key in ("usd_brl", "eur_brl"):
+    for key, decimals in (("usd_brl", 2), ("eur_brl", 2), ("btc_brl", 0)):
         quote = quotes.get(key) or {}
-        if quote.get("bid") is not None:
-            quote["display"] = f"R$ {format_number_pt_br(float(quote['bid']), 2)}"
+        if quote.get("bid") is None:
+            continue
+        _fill_variation(quote)
+        quote["display"] = (
+            f"R$ {format_number_pt_br(float(quote['bid']), decimals)}{_variation_suffix(quote)}"
+        )
 
     ars = quotes.get("ars_brl") or {}
     if ars.get("bid"):
         try:
             # 0,0034 BRL por peso não diz nada a ninguém; o inverso é legível.
-            ars["display"] = f"1 BRL = {format_number_pt_br(1 / float(ars['bid']), 2)} ARS"
+            _fill_variation(ars)
+            inverted = dict(ars, variation_percent=_invert_variation(ars.get("variation_percent")))
+            ars["display"] = (
+                f"1 BRL = {format_number_pt_br(1 / float(ars['bid']), 2)} ARS"
+                f"{_variation_suffix(inverted)}"
+            )
         except (ValueError, ZeroDivisionError):
             pass
-
-    btc = quotes.get("btc_brl") or {}
-    if btc.get("bid") is not None:
-        btc["display"] = f"R$ {format_number_pt_br(float(btc['bid']), 0)}"
 
     ibov = quotes.get("ibovespa") or {}
     points = ibov.get("points")
@@ -269,10 +317,7 @@ def _decorate(quotes: dict[str, Any]) -> None:
             except (ValueError, ZeroDivisionError):
                 variation = None
 
-        display = f"{format_number_pt_br(float(points), 0)} pts"
-        if variation is not None:
-            display += f" ({format_number_pt_br(float(variation), 2)}%)"
-        ibov["display"] = display
+        ibov["display"] = f"{format_number_pt_br(float(points), 0)} pts{_variation_suffix(ibov)}"
 
 
 # --------------------------------------------------------------------------- manchetes

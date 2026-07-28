@@ -10,9 +10,9 @@ pronto. Marque `[x]` conforme implementarmos.
 
 ## Fase 0 — Segurança (fazer antes de qualquer código)
 
-- [ ] **0.1 Revogar o token do bot.** ⚠️ **Ação sua, ainda pendente.** O token aparece em texto puro
-  nos logs anteriores a 27/07 e foi exposto em conversa. Gerar novo no BotFather (`/revoke`) e
-  atualizar `config/.env` local e da VPS.
+- [x] **0.1 Revogar o token do bot.** Feito em 28/07. Confirmado via `getMe`: o bot
+  @Jornal_matinal_bot responde com um segredo diferente do que vazou (o id 8947249677 não muda no
+  revoke, só a parte secreta). O token antigo está morto.
 - [x] **0.2 Silenciar o `httpx`.** Feito em `setup_logging` ([core/utils.py](core/utils.py)) —
   `httpx` e `httpcore` em WARNING. Verificado no mesmo arquivo de log: a execução anterior à
   correção gravou 18 linhas de requisição e 1 token; a posterior, zero e zero.
@@ -173,7 +173,7 @@ pop_culture  →  0 Omelete    |  0 JovemNerd  |  8 IGN  |  7 Polygon
 
 ## Fase 6 — Futebol
 
-- [ ] **6.1 Substituir o scraping do GE por uma API.** Os campos se chamam `next_match`/`last_match`
+- [x] **6.1 Substituir o scraping do GE por uma API.** ✅ Feito com football-data.org. Os campos se chamam `next_match`/`last_match`
   mas o scraper só extrai blocos de texto solto: nas duas execuções a Seleção saiu como "não há
   informações sobre jogos". Avaliar football-data.org ou api-futebol.com.br.
 - [x] **6.2 Paliativo imediato:** remover o fallback `match_items: "div, section"`
@@ -220,7 +220,7 @@ pop_culture  →  0 Omelete    |  0 JovemNerd  |  8 IGN  |  7 Polygon
   corpo é claro — `{"code":"QuotaExceeded"}`. Não é User-Agent nem bloqueio: é cota de plano
   gratuito, contada por IP. Tratado no item 5.6.
 
-- [ ] **7.1c Plano B, só se o 7.1 não bastar:** substituir o CheapShark. Candidatas alinhadas com a
+- [x] **7.1c Plano B — desnecessário**, o User-Agent resolveu. Item original: substituir o CheapShark. Candidatas alinhadas com a
   seção "Ofertas & Games Grátis" (validar cada uma **na VPS**):
   - GamerPower (`gamerpower.com/api/giveaways`) — jogos grátis e giveaways, exatamente o tema
   - Epic Games free games (endpoint público de `freeGamesPromotions`)
@@ -290,3 +290,49 @@ pop_culture  →  0 Omelete    |  0 JovemNerd  |  8 IGN  |  7 Polygon
 - **A cadeia de fallback funcionou bem demais.** Ela salvou o jornal todos os dias, e por isso
   escondeu que a fonte primária estava morta. Resiliência sem observabilidade vira dívida silenciosa:
   por isso a Fase 1 vem antes de qualquer correção de conteúdo.
+
+
+---
+
+## Rodada 2 — qualidade dos dados (28/07/2026)
+
+Motivada pela leitura do jornal em produção: os dados chegavam, mas pouco processados.
+
+- [x] **R2.1 Jogos de futebol via football-data.org.** A seção repetia as mesmas manchetes por
+  dias porque as páginas de time do GE são feed de notícia, não agenda. Agora a API dá adversário,
+  data e horário (convertido para o fuso de Brasília) e o placar do último jogo; o GE segue como
+  fonte de notícia, filtrada por `relevance_keywords`. A seção é omitida quando não há nada.
+  ⚠️ A API registra o Athletico como "CA Paranaense", então a resolução por nome falha — os ids
+  ficam fixos no config (Athletico 1768, Seleção 764), confirmados na API.
+- [x] **R2.2 Promoções por canais do Telegram.** `https://t.me/s/<canal>` expõe as últimas
+  mensagens de canais públicos sem bot e sem token. Substitui o monitoramento de produto como
+  fonte principal — o Mercado Livre passou a redirecionar para um muro de verificação e sua API
+  pública exige OAuth; o Zoom devolve o mesmo catálogo do Buscapé, que ficou como fonte
+  secundária opcional.
+- [x] **R2.3 Jogos realmente gratuitos (GamerPower).** A seção prometia "Games Grátis" e trazia
+  sete títulos obscuros a US$ 0,51 — os mesmos por semanas, porque o ranking de maior desconto do
+  CheapShark é quase estático. Agora os giveaways vêm primeiro, ordenados por valor.
+- [x] **R2.4 Clima com o que a API já dava de graça.** Condição, sensação térmica, vento,
+  nascer/pôr do sol, índice UV e **janela de chuva por hora** — "chuva provável entre 16h e 19h"
+  é o dado que muda o dia de quem lê às 6h.
+- [x] **R2.5 Variação percentual nas moedas.** O campo já vinha do HG Brasil e era descartado.
+  Sem ele o dólar parecia congelado, porque 5,1288 e 5,116 arredondam para o mesmo "R$ 5,12".
+  A variação do ARS é invertida junto com a cotação (1 BRL = X ARS), senão o peso apareceria
+  subindo nos dias em que enfraqueceu.
+- [x] **R2.6 Histórico de 30 dias** ([core/history.py](core/history.py)), podado a cada gravação.
+  Guarda o texto dos jornais (os 3 últimos vão ao prompt, contra 1 antes) e as métricas numéricas,
+  que alimentam o contexto comparativo: "maior valor em 30 dias". Migra sozinho o
+  `last_journal.txt` da versão anterior.
+- [x] **R2.7 Alerta sobre resultado, não sobre fonte.** A AwesomeAPI falha todo dia e o BTC é
+  derivado sem problema — alertar sobre isso diariamente treinaria o leitor a ignorar os alertas,
+  que é exatamente o que a Fase 1 veio resolver. Agora só alerta o que faltou no jornal final.
+- [x] **R2.8 Modelo `gemini-3.6-flash`.** Comparado com o mesmo payload: sintetiza as manchetes em
+  texto próprio (o 2.5-flash copiava os títulos crus, com os "veja" e "confira" do original), sai
+  26% mais curto e 15% mais rápido. Todos os modelos `pro` respondem 429 na cota gratuita.
+
+### Ainda em aberto
+
+- [ ] Revogar já foi feito; **apagar os logs antigos** da VPS que contêm o token antigo (item 0.3).
+- [ ] Avaliar `min_steam_rating` mais alto: mesmo com 70, as ofertas pagas do CheapShark ainda
+  são de jogos obscuros. Os giveaways da GamerPower cobrem a seção, então talvez valha reduzir o
+  peso das ofertas pagas.

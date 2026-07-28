@@ -5,14 +5,18 @@ Rodar com:  python -m pytest -q
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
+from core import history
 from core.telegram_sender import _open_tags, _split_message, sanitize_html
 from core.utils import format_date_pt_br, format_number_pt_br, strip_html
+from scrapers.finance import _invert_variation, _variation_suffix
+from scrapers.gaming import _worth_usd
 from scrapers.news_rss import _interleave, _normalize_title
 from scrapers.promotions import _parse_price, _slugify
+from scrapers.weather import _rain_window, _uv_label
 
 
 # --------------------------------------------------------------------------- números
@@ -176,3 +180,134 @@ def test_interleave_respeita_feed_menor():
 
 def test_slugify():
     assert _slugify("Headset XYZ  Pro!") == "headset-xyz-pro"
+
+
+# --------------------------------------------------------------------------- economia
+
+
+def test_variation_suffix_positivo_leva_sinal():
+    assert _variation_suffix({"variation_percent": 0.098}) == " (+0,10%)"
+
+
+def test_variation_suffix_negativo():
+    assert _variation_suffix({"variation_percent": -2.13}) == " (-2,13%)"
+
+
+def test_variation_suffix_ausente_nao_polui():
+    assert _variation_suffix({}) == ""
+
+
+def test_invert_variation_troca_o_sinal():
+    # Se ARS-BRL sobe 1%, o que 1 BRL compra em ARS cai ~0,99%.
+    assert _invert_variation(1.0) == -0.99
+    assert _invert_variation(-1.0) == 1.01
+
+
+def test_invert_variation_sem_dado():
+    assert _invert_variation(None) is None
+
+
+# --------------------------------------------------------------------------- clima
+
+
+def test_rain_window_encontra_intervalo():
+    horas = list(range(24))
+    probs = [0] * 14 + [60, 70, 80] + [10] * 7
+    assert _rain_window(horas, probs, 40) == "14h-16h"
+
+
+def test_rain_window_hora_unica():
+    horas = list(range(24))
+    probs = [0] * 9 + [55] + [0] * 14
+    assert _rain_window(horas, probs, 40) == "9h"
+
+
+def test_rain_window_sem_chuva():
+    assert _rain_window(list(range(24)), [5] * 24, 40) is None
+
+
+@pytest.mark.parametrize(
+    "indice,esperado",
+    [(0, "baixo"), (2.9, "baixo"), (5.65, "moderado"), (7, "alto"), (9, "muito alto"), (12, "extremo")],
+)
+def test_uv_label(indice, esperado):
+    assert _uv_label(indice) == esperado
+
+
+# --------------------------------------------------------------------------- gaming
+
+
+@pytest.mark.parametrize("texto,esperado", [("$19.99", 19.99), ("$2.99", 2.99), ("N/A", 0.0), (None, 0.0)])
+def test_worth_usd(texto, esperado):
+    assert _worth_usd(texto) == esperado
+
+
+# --------------------------------------------------------------------------- histórico
+
+
+def _historico(dias: int, metrica: str = "usd_brl") -> dict:
+    hoje = date.today()
+    registro: dict = {}
+    for i in range(dias, 0, -1):
+        dia = hoje - timedelta(days=i)
+        registro = history.record(registro, dia, f"jornal {dia}", {metrica: 5.0 + i * 0.01})
+    return registro
+
+
+def test_prune_respeita_a_janela():
+    podado = history.prune(_historico(40), 30)
+    assert len(podado) == 30
+
+
+def test_prune_descarta_chave_invalida():
+    assert history.prune({"nao-e-data": {}, date.today().isoformat(): {}}, 30) == {
+        date.today().isoformat(): {}
+    }
+
+
+def test_recent_journals_do_mais_novo_para_o_mais_antigo():
+    dias = [dia for dia, _ in history.recent_journals(_historico(10), 3)]
+    assert dias == sorted(dias, reverse=True)
+    assert len(dias) == 3
+
+
+def test_describe_metric_detecta_maxima():
+    assert history.describe_metric(_historico(30), "usd_brl", 99.0) == "maior valor em 30 dias"
+
+
+def test_describe_metric_detecta_minima():
+    assert history.describe_metric(_historico(30), "usd_brl", 0.1) == "menor valor em 30 dias"
+
+
+def test_describe_metric_silencia_no_meio_da_faixa():
+    assert history.describe_metric(_historico(30), "usd_brl", 5.15) is None
+
+
+def test_describe_metric_exige_serie_minima():
+    # Com 4 dias, "maior valor em 4 dias" seria ruído, não informação.
+    assert history.describe_metric(_historico(4), "usd_brl", 99.0) is None
+
+
+def test_enrich_payload_acrescenta_sem_perder_o_display():
+    payload = {"finance": {"usd_brl": {"bid": 99.0, "display": "R$ 99,00 (+1,00%)"}}}
+    history.enrich_payload(payload, _historico(30))
+    assert payload["finance"]["usd_brl"]["display"] == "R$ 99,00 (+1,00%) — maior valor em 30 dias"
+
+
+def test_enrich_payload_ignora_ativo_sem_display():
+    payload = {"finance": {"usd_brl": {"bid": 99.0}}}
+    history.enrich_payload(payload, _historico(30))
+    assert "display" not in payload["finance"]["usd_brl"]
+
+
+def test_extract_metrics_le_cotacoes_e_temperaturas():
+    payload = {
+        "finance": {"usd_brl": {"bid": 5.12}, "ibovespa": {"points": 175334.45}},
+        "weather": {"temp_max_c": 26.3, "temp_min_c": 16.5},
+    }
+    assert history.extract_metrics(payload) == {
+        "usd_brl": 5.12,
+        "ibovespa": 175334.45,
+        "temp_max": 26.3,
+        "temp_min": 16.5,
+    }

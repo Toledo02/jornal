@@ -41,10 +41,11 @@ Edite `config/.env`:
 | Variável | Descrição |
 |----------|-----------|
 | `LLM_API_KEY` | Chave do Gemini ([AI Studio](https://aistudio.google.com/apikey)) |
-| `LLM_MODEL` | Modelo (padrão: `gemini-2.5-flash`) |
+| `LLM_MODEL` | Modelo (padrão: `gemini-3.6-flash`; os `pro` dão 429 no plano gratuito) |
 | `LLM_FALLBACK_MODELS` | Modelos tentados se o principal der 503 |
 | `TELEGRAM_BOT_TOKEN` | Token do BotFather |
 | `TELEGRAM_CHAT_ID` | ID do chat de destino |
+| `FOOTBALL_DATA_TOKEN` | Jogos e placares ([football-data.org](https://www.football-data.org/client/register), grátis) |
 | `AWESOMEAPI_TOKEN` | Opcional; a AwesomeAPI é a última fonte da cadeia de cotações |
 
 Os nomes `OPENAI_*` continuam aceitos por compatibilidade (herança de quando o projeto usava
@@ -84,8 +85,10 @@ weather:
   lon: -49.2733
 
 promotions:
+  telegram_channels:    # fonte principal das promoções
+    - "promobit"
   product_names:
-    - "Headset XYZ"     # busca preço no Mercado Livre e Buscapé
+    - "SSD Kingston NV2 1TB"   # opcional: acompanha o preço via Buscapé
 ```
 
 Os feeds são intercalados em round-robin antes do corte por `max_items_per_category`, então cada
@@ -103,8 +106,15 @@ fonte contribui proporcionalmente. Entradas mais velhas que `max_age_hours` são
 | Telegram rejeita o HTML | Reenvia sem marcação, com as tags removidas |
 | Mensagem acima de 4096 chars | Dividida sem cortar tags no meio |
 
-Falhas parciais **sempre** geram alerta. Antes elas ficavam só no log, e foi assim que dois feeds
-quebrados passaram três semanas despercebidos.
+Falhas parciais geram alerta **quando faltam dados no jornal final**. Uma fonte que falha mas é
+coberta pelo fallback fica só no log: alertar todo dia sobre algo que não afeta o resultado
+treinaria você a ignorar os alertas.
+
+## Histórico
+
+`logs/history.json` guarda 30 dias (`history.retention_days`), podados a cada gravação. Serve a
+duas coisas: os 3 jornais mais recentes vão ao prompt para a regra anti-repetição, e as métricas
+numéricas alimentam o contexto comparativo — `R$ 5,60 (+0,10%) — maior valor em 30 dias`.
 
 ## Módulos de dados
 
@@ -115,8 +125,8 @@ quebrados passaram três semanas despercebidos.
 5. **Cultura Pop** — RSS
 6. **GitHub Trending** — scraping
 7. **Gaming** — CheapShark, filtrado por nota da Steam
-8. **Futebol** — scraping GE Globo Esporte
-9. **Promoções** — monitoramento de preços com histórico local
+8. **Futebol** — jogos via football-data.org + notícias filtradas do GE
+9. **Promoções** — canais públicos do Telegram + monitoramento opcional de produtos
 
 ## Deploy na VPS (cron)
 

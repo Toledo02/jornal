@@ -2,6 +2,8 @@ weather:
   city: "Curitiba"
   lat: -25.4284
   lon: -49.2733
+  # A partir de qual chance por hora vale avisar "vai chover entre X e Y".
+  rain_threshold_percent: 40
 
 finance:
   scrape_targets:
@@ -38,31 +40,66 @@ github:
   max_repos: 5
 
 gaming:
+  # Jogos realmente gratuitos (Epic, Steam, GOG, itch.io...). É o que a seção promete.
+  gamerpower:
+    enabled: true
+    type: "game"          # "game" | "loot" | "beta"
+    max_items: 5
+    platforms: ["pc", "steam", "epic", "gog", "drm-free", "itch"]
   cheapshark:
     enabled: true
-    max_deals: 7
+    max_deals: 5
     min_savings_percent: 90
     # Nota mínima na Steam (%). Sem isso, "ordenar por maior desconto" só traz shovelware.
     min_steam_rating: 70
 
 football:
+  # Códigos de competição da football-data.org usados para descobrir o id dos times.
+  # BSA = Brasileirão Série A. O id resolvido fica em logs/football_teams.json.
+  competitions: ["BSA", "CL", "WC"]
   teams:
-    - "Athletico Paranaense"
-    - "Brazil"
+    # ids fixos: a resolução automática por nome não acha o Athletico, porque a API o
+    # registra como "CA Paranaense". Confirmados na API em 28/07/2026.
+    - name: "Athletico Paranaense"
+      api_id: 1768
+      ge_slug: "pr/futebol/times/athletico-pr"
+    - name: "Seleção Brasileira"
+      api_id: 764
+      ge_slug: "futebol/selecao-brasileira"
   sources:
     ge:
       base_url: "https://ge.globo.com"
-      team_slugs:
-        # URLs finais: o slug antigo passava por dois redirects 301 encadeados.
-        Athletico Paranaense: "pr/futebol/times/athletico-pr"
-        Brazil: "futebol/selecao-brasileira"
       selectors:
-        next_match: ".agenda-jogos__item, .proximos-jogos, .jogo__informacoes"
-        last_match: ".resultado-jogos__item, .ultimos-jogos, .placar"
         # Manchetes recentes. NÃO usar seletor amplo como "div, section": ele casa com a
         # página inteira e injeta o body todo no payload do LLM.
         headlines: ".feed-post-link, .bastian-feed-item .feed-post-body-title"
-        max_headlines: 6
+        max_headlines: 4
+      # Só passam manchetes sobre elenco e jogo. Sem isso a seção repetia as mesmas
+      # matérias evergreen por dias seguidos.
+      relevance_keywords:
+        - "contrat"
+        - "reforço"
+        - "negocia"
+        - "acerta"
+        - "assina"
+        - "renova"
+        - "empréstimo"
+        - "transferência"
+        - "vendido"
+        - "lesão"
+        - "lesionado"
+        - "desfalque"
+        - "suspenso"
+        - "cirurgia"
+        - "escalação"
+        - "convoca"
+        - "poupado"
+        - "retorna"
+        - "estreia"
+        - "gol"
+        - "vitória"
+        - "derrota"
+        - "empate"
       # Chamadas de engajamento que o GE mistura ao feed e não são notícia.
       noise_patterns:
         - "siga o canal"
@@ -75,9 +112,37 @@ football:
         - "na globo, sportv"
 
 promotions:
+  # Fonte principal: canais públicos de promoção. Lidos via https://t.me/s/<canal>, a prévia
+  # web que o Telegram publica — sem bot, sem token, sem entrar no canal.
+  telegram_channels:
+    - "promobit"
+    - "promocoesdodia"
+    - "hardmob_promo"
+  max_age_hours: 24
+  per_channel: 5
+  max_items: 10
+  noise_patterns:
+    - "sorteio"
+    - "participe do grupo"
+    - "entre no nosso"
+    - "clique aqui para receber"
+    - "grupo de whatsapp"
+
+  # Opcional: acompanha o preço de produtos específicos entre execuções (via Buscapé).
+  # Use marca e modelo — a busca pega o primeiro resultado, então termo vago monitora
+  # o produto errado. Ex.: "SSD Kingston NV2 1TB M.2 NVMe".
+  product_names: []
   drop_threshold_percent: 5
   history_file: "promotions_history.json"
-  product_names: []
+
+history:
+  file: "history.json"
+  # Janela do histórico. Dias mais antigos são descartados a cada gravação, então o arquivo
+  # se mantém no mesmo tamanho em vez de crescer para sempre.
+  retention_days: 30
+  # Quantos jornais anteriores vão no prompt para a regra anti-repetição. Cada um custa
+  # ~1.500 tokens, então subir muito encarece sem ganho proporcional.
+  journals_in_prompt: 3
 
 orchestrator:
   scraper_timeout_seconds: 30

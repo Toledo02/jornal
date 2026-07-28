@@ -16,8 +16,11 @@ CONFIG_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DEFAULT_ENV_PATH = CONFIG_DIR / ".env"
 
-DEFAULT_MODEL = "gemini-2.5-flash"
-DEFAULT_FALLBACK_MODELS = ["gemini-2.0-flash"]
+# Medido em 28/07/2026 com o payload real: o 3.6-flash sintetiza as manchetes em texto próprio
+# (o 2.5-flash copiava os títulos crus), sai ~25% mais curto e mais rápido. Os modelos "pro"
+# respondem 429 RESOURCE_EXHAUSTED na cota gratuita — não adianta configurá-los aqui.
+DEFAULT_MODEL = "gemini-3.6-flash"
+DEFAULT_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
 
 @dataclass
@@ -35,6 +38,7 @@ class Settings:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     awesomeapi_token: str = ""
+    football_data_token: str = ""
 
     def get(self, *keys: str, default: Any = None) -> Any:
         node: Any = self.config
@@ -116,4 +120,5 @@ def load_settings(
         telegram_bot_token=_env("TELEGRAM_BOT_TOKEN"),
         telegram_chat_id=_env("TELEGRAM_CHAT_ID"),
         awesomeapi_token=_env("AWESOMEAPI_TOKEN"),
+        football_data_token=_env("FOOTBALL_DATA_TOKEN"),
     )

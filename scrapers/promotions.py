@@ -1,19 +1,136 @@
-"""Product price monitoring via multi-source search."""
+"""Promoções: canais públicos do Telegram + monitoramento opcional de produtos.
+
+Os canais são a fonte principal. A vitrine de um comparador mostra o preço corrente de um
+produto que você escolheu; os canais mostram o que está barato *hoje*, com curadoria humana —
+que é onde as promoções de verdade aparecem.
+
+A leitura usa `https://t.me/s/<canal>`, a prévia web que o Telegram publica para canais
+públicos: HTML simples, sem bot, sem token e sem entrar no canal.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 from bs4 import BeautifulSoup
 
 from core.utils import BROWSER_HEADERS, ScraperResult, http_get_text
 
 logger = logging.getLogger(__name__)
+
+TELEGRAM_PREVIEW_URL = "https://t.me/s/{channel}"
+
+
+# --------------------------------------------------------------------------- canais
+
+
+def _message_datetime(node: Any) -> datetime | None:
+    time_el = node.select_one("time[datetime]")
+    if not time_el:
+        return None
+    try:
+        return datetime.fromisoformat(time_el["datetime"].replace("Z", "+00:00"))
+    except (KeyError, ValueError):
+        return None
+
+
+def _external_link(text_el: Any) -> str | None:
+    """Primeiro link que sai do Telegram — normalmente o da oferta."""
+    for anchor in text_el.select("a[href]"):
+        href = anchor.get("href", "")
+        host = urlparse(href).netloc.lower()
+        if href.startswith("http") and not host.endswith("t.me") and "telegram" not in host:
+            return href
+    return None
+
+
+def _parse_channel(html: str, channel: str, cutoff: datetime, noise: list[str]) -> list[dict[str, Any]]:
+    soup = BeautifulSoup(html, "lxml")
+    messages: list[dict[str, Any]] = []
+
+    for node in soup.select("div.tgme_widget_message"):
+        text_el = node.select_one(".tgme_widget_message_text")
+        if not text_el:
+            continue
+
+        published = _message_datetime(node)
+        if published and published < cutoff:
+            continue
+
+        text = " ".join(text_el.get_text(" ", strip=True).split())
+        if len(text) < 25 or any(pattern in text.lower() for pattern in noise):
+            continue
+
+        post = node.get("data-post")
+        messages.append(
+            {
+                "channel": channel,
+                "text": text[:400],
+                "url": _external_link(text_el),
+                "permalink": f"https://t.me/{post}" if post else None,
+                "published": published.isoformat() if published else None,
+            }
+        )
+
+    # Mais recentes primeiro: a prévia vem em ordem cronológica.
+    messages.reverse()
+    return messages
+
+
+async def _fetch_channels(settings, promo_cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    channels = [str(c).strip().lstrip("@") for c in (promo_cfg.get("telegram_channels") or [])]
+    if not channels:
+        return [], []
+
+    max_age_hours = int(promo_cfg.get("max_age_hours", 24))
+    per_channel = int(promo_cfg.get("per_channel", 5))
+    total = int(promo_cfg.get("max_items", 10))
+    noise = [str(p).lower() for p in (promo_cfg.get("noise_patterns") or [])]
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+    per_channel_items: list[list[dict[str, Any]]] = []
+    errors: list[str] = []
+
+    for channel in channels:
+        try:
+            html = await http_get_text(
+                TELEGRAM_PREVIEW_URL.format(channel=channel), settings, headers=BROWSER_HEADERS
+            )
+            found = _parse_channel(html, channel, cutoff, noise)[:per_channel]
+            if found:
+                per_channel_items.append(found)
+            else:
+                logger.info("Canal %s sem ofertas nas últimas %sh", channel, max_age_hours)
+        except Exception as exc:
+            logger.warning("Falha ao ler o canal %s: %s", channel, exc)
+            errors.append(f"@{channel}: {exc}")
+
+    # Round-robin entre canais, mesma razão dos feeds RSS: concatenar e truncar faria o
+    # primeiro canal ocupar todos os slots.
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in zip_longest(*per_channel_items):
+        for item in row:
+            if item is None:
+                continue
+            key = re.sub(r"[^\w]", "", item["text"].lower())[:60]
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(item)
+            if len(items) >= total:
+                return items, errors
+    return items, errors
+
+
+# --------------------------------------------------------------------------- produtos
 
 
 def _parse_price(text: str) -> float | None:
@@ -63,33 +180,12 @@ def _slugify(name: str) -> str:
     return re.sub(r"[\s_]+", "-", slug)
 
 
-async def _search_mercado_livre(product_name: str, settings) -> dict[str, Any] | None:
-    url = f"https://lista.mercadolivre.com.br/{quote_plus(product_name)}"
-    html = await http_get_text(url, settings, headers=BROWSER_HEADERS)
-    soup = BeautifulSoup(html, "lxml")
-
-    item = soup.select_one("li.ui-search-layout__item, div.ui-search-result")
-    if not item:
-        return None
-
-    link_el = item.select_one("a.ui-search-link, a.poly-component__title")
-    price_el = item.select_one(
-        "span.andes-money-amount__fraction, "
-        "span.price-tag-fraction, "
-        ".poly-price__current .andes-money-amount__fraction"
-    )
-    if not price_el:
-        return None
-
-    price = _parse_price(price_el.get_text(strip=True))
-    if price is None:
-        return None
-
-    href = link_el.get("href", url) if link_el else url
-    return {"price": price, "url": href, "source": "mercado_livre"}
-
-
 async def _search_buscape(product_name: str, settings) -> dict[str, Any] | None:
+    """Buscapé é a única vitrine que ainda responde.
+
+    O Mercado Livre redireciona para um muro de verificação de conta e a API pública dele
+    exige app OAuth registrado; o Zoom é do mesmo grupo do Buscapé e devolve o mesmo catálogo.
+    """
     url = f"https://www.buscape.com.br/search?q={quote_plus(product_name)}"
     html = await http_get_text(url, settings, headers=BROWSER_HEADERS)
     soup = BeautifulSoup(html, "lxml")
@@ -98,10 +194,8 @@ async def _search_buscape(product_name: str, settings) -> dict[str, Any] | None:
     if not card:
         return None
 
-    link_el = card.select_one("a[href]")
     price_el = card.select_one(
-        "[data-testid='price'], span[class*='Price'], "
-        "span[class*='price'], div[class*='Price']"
+        "[data-testid='price'], span[class*='Price'], span[class*='price'], div[class*='Price']"
     )
     if not price_el:
         return None
@@ -110,6 +204,7 @@ async def _search_buscape(product_name: str, settings) -> dict[str, Any] | None:
     if price is None:
         return None
 
+    link_el = card.select_one("a[href]")
     href = link_el.get("href", url) if link_el else url
     if href.startswith("/"):
         href = f"https://www.buscape.com.br{href}"
@@ -117,55 +212,10 @@ async def _search_buscape(product_name: str, settings) -> dict[str, Any] | None:
     return {"price": price, "url": href, "source": "buscape"}
 
 
-async def _find_best_price(product_name: str, settings) -> dict[str, Any]:
-    offers: list[dict[str, Any]] = []
-    for search_fn in (_search_mercado_livre, _search_buscape):
-        try:
-            offer = await search_fn(product_name, settings)
-            if offer:
-                offers.append(offer)
-        except Exception as exc:
-            logger.warning("Price search failed (%s) for %s: %s", search_fn.__name__, product_name, exc)
-
-    if not offers:
-        raise ValueError(f"No offers found for '{product_name}'")
-
-    best = min(offers, key=lambda o: o["price"])
-    return {
-        "name": product_name,
-        "price": best["price"],
-        "url": best["url"],
-        "source": best["source"],
-        "all_offers": offers,
-    }
-
-
-def _resolve_product_names(promo_cfg: dict[str, Any]) -> list[str]:
-    names = promo_cfg.get("product_names") or []
-    if names:
-        return [str(name).strip() for name in names if str(name).strip()]
-
-    legacy = promo_cfg.get("products") or []
-    resolved: list[str] = []
-    for product in legacy:
-        if isinstance(product, str):
-            resolved.append(product.strip())
-        elif isinstance(product, dict):
-            name = product.get("name") or product.get("url")
-            if name:
-                resolved.append(str(name).strip())
-    return resolved
-
-
-async def fetch(settings) -> ScraperResult:
-    section = "promotions"
-    promo_cfg = settings.get("promotions") or {}
-    product_names = _resolve_product_names(promo_cfg)
-
-    if not product_names:
-        # Lista vazia é configuração deliberada, não falha: devolve vazio para o prompt omitir
-        # a seção, em vez de o jornal repetir "nenhuma promoção hoje" todo dia.
-        return ScraperResult(section=section, status="ok", data={"products": []})
+async def _track_products(settings, promo_cfg: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    names = [str(n).strip() for n in (promo_cfg.get("product_names") or []) if str(n).strip()]
+    if not names:
+        return [], []
 
     history_file = settings.project_root / promo_cfg.get("history_file", "promotions_history.json")
     history = _load_history(history_file)
@@ -174,22 +224,26 @@ async def fetch(settings) -> ScraperResult:
     results: list[dict[str, Any]] = []
     errors: list[str] = []
 
-    for product_name in product_names:
+    for name in names:
         try:
-            current = await _find_best_price(product_name, settings)
-            key = _slugify(product_name)
+            current = await _search_buscape(name, settings)
+            if not current:
+                errors.append(f"{name}: não encontrado")
+                continue
+
+            key = _slugify(name)
             previous_price = history.get(key, {}).get("price")
             change_percent = None
             alert = False
 
             if previous_price and previous_price > 0:
-                change_percent = round(((current["price"] - previous_price) / previous_price) * 100, 2)
-                if change_percent <= -threshold:
-                    alert = True
+                change_percent = round((current["price"] - previous_price) / previous_price * 100, 2)
+                alert = change_percent <= -threshold
 
-            history[key] = {"price": current["price"], "name": product_name}
+            history[key] = {"price": current["price"], "name": name}
             results.append(
                 {
+                    "name": name,
                     **current,
                     "previous_price": previous_price,
                     "change_percent": change_percent,
@@ -197,18 +251,35 @@ async def fetch(settings) -> ScraperResult:
                 }
             )
         except Exception as exc:
-            logger.warning("Promotion search failed for %s: %s", product_name, exc)
-            errors.append(f"{product_name}: {exc}")
+            logger.warning("Busca de preço falhou para %s: %s", name, exc)
+            errors.append(f"{name}: {exc}")
 
     _save_history(history_file, history)
+    return results, errors
 
-    if not results:
+
+# --------------------------------------------------------------------------- entrada
+
+
+async def fetch(settings) -> ScraperResult:
+    section = "promotions"
+    promo_cfg = settings.get("promotions") or {}
+
+    offers, channel_errors = await _fetch_channels(settings, promo_cfg)
+    products, product_errors = await _track_products(settings, promo_cfg)
+
+    logger.info("promotions: %s ofertas de canais, %s produtos monitorados", len(offers), len(products))
+
+    errors = channel_errors + product_errors
+    data = {"offers": offers, "products": products}
+
+    # Sem nada configurado não é falha: devolve vazio para o prompt omitir a seção.
+    if not offers and not products and errors:
         return ScraperResult(section=section, status="error", error="; ".join(errors))
 
-    status = "partial" if errors else "ok"
     return ScraperResult(
         section=section,
-        status=status,
-        data={"products": results, "drop_threshold_percent": threshold},
+        status="partial" if errors else "ok",
+        data=data,
         error="; ".join(errors) if errors else None,
     )

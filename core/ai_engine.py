@@ -43,26 +43,45 @@ Rules:
    - 🛒 Achados & Promoções
    - 📚 Neste Dia na História
 5. SECTION CONTENT:
+   - Clima: write a short, practical paragraph. Lead with the current condition and temperature,
+     then the range for the day. If "rain_window" is present, state plainly when it will rain
+     ("chuva provável entre 16h e 19h") — that is the most useful fact in the section. If it is
+     null, do not speculate about rain. Always close with sunrise and sunset times. Mention the
+     UV index only when uv_label is "alto" or above. Never invent values not present in the data.
+     Temperature, wind and range arrive already formatted in "temp_now", "feels_like", "wind" and
+     "temp_range" — copy those strings verbatim; do not rewrite the numbers.
    - Economia: present USD, EUR, ARS, BTC and IBOVESPA as bullet points, never as running text.
-     Each asset carries a preformatted "display" field — copy that string EXACTLY. Never reformat
-     a number, never convert currency, and never compute a percentage yourself. If an asset has no
-     "display" field, omit that bullet.
+     Each asset carries a preformatted "display" field — copy that string EXACTLY, including the
+     percentage in parentheses. Never reformat a number, never convert currency, and never compute
+     a percentage yourself. If an asset has no "display" field, omit that bullet.
    - Tecnologia & Dev: top tech news, followed by the GitHub trending repositories.
    - Mundo: EXACTLY 3 most relevant global facts (wars, macroeconomics, historic events). Ignore
      clickbait.
    - Cultura Pop: prioritise major film/streaming releases, anime, book adaptations and updates on
      competitive scenes or MOBA/tactical game patches. Ignore rumours, minor delays and celebrity
      gossip.
-   - Ofertas & Games Grátis: list the CheapShark deals as bullets, highlighting the free ones
-     (is_free = true) and the deepest discounts.
-   - Futebol: the data contains recent headlines WITHOUT explicit dates. Never write "ontem",
-     "hoje", "amanhã" or any relative time reference for football — you cannot know when those
-     events happened. Summarise them without dating them.
+   - Ofertas & Games Grátis: the "free_games" list comes FIRST and is the point of the section —
+     these are real giveaways. For each, give the title, the platform, what it is worth, and when
+     it ends if known. Then, only if there is room, add a few "deals" (paid discounts) as a
+     secondary block. Deal prices are in US dollars from international stores: write them as
+     "US$ 0,71" and never convert to reais. If "free_games" is empty, still show the deals; if
+     both are empty, omit the whole section.
+   - Futebol: lead with "next_matches" (opponent, competition, day and kick-off time) — that is
+     the point of the section. Then "last_matches" with the score. Those strings are already
+     formatted: copy them, do not reword the dates. Finally summarise "news" briefly. The news
+     items carry NO date, so never write "ontem", "hoje" or "amanhã" about them — only the match
+     strings have reliable dates.
+   - Achados & Promoções: "offers" are deals curated by Telegram channels, already in reais —
+     copy the prices as they appear and never convert or recalculate. Pick the most interesting
+     ones and write one bullet each, with a short description and the price. "products" is the
+     personal price watch: mention an item only when "alert" is true or "change_percent" is
+     negative, stating the previous and current price.
    - Neste Dia na História: one concise historical fact for today's calendar day and month, from
      your own knowledge.
 6. LINKS: HTML links (<a href="URL">Text</a>) are allowed EXCLUSIVELY in:
    - Ofertas & Games Grátis and Achados & Promoções, as <a href="URL">[Resgatar]</a> or
-     <a href="URL">[Ver Oferta]</a> at the end of each item.
+     <a href="URL">[Ver Oferta]</a> at the end of each item. For a promotion, prefer the "url"
+     field; fall back to "permalink" when "url" is null.
    - GitHub Trending, as "...descrição do repo. <a href="URL">[Ver Repo]</a>".
    No links anywhere else — Mundo, Tecnologia (news), Economia, Cultura Pop and Futebol must be
    pure text. No loose URLs anywhere.
@@ -75,7 +94,8 @@ Rules:
    História", which uses your own historical knowledge.
 10. Do not wrap the output in code fences.
 11. ANTI-REPETITION POLICY:
-    - The tag <PREVIOUS_DAY_JOURNAL> contains yesterday's journal, when available.
+    - The tag <RECENT_JOURNALS> contains the journals of the previous days, each with its date.
+      A story may only reappear if it is genuinely new or has evolved since ALL of them.
     - This policy applies ONLY to these news sections: Tecnologia & Dev, Mundo, Cultura Pop &
       Entretenimento, and Futebol. Do not repeat a story already covered yesterday unless there is
       a significant development, an impactful update, or the continuation of an ongoing event.
@@ -89,7 +109,9 @@ Rules:
 PERMANENT_ERROR_MARKERS = ("400", "401", "403", "404", "INVALID_ARGUMENT", "PERMISSION_DENIED")
 
 
-def _build_user_prompt(payload: dict[str, Any], settings, previous_journal_text: str | None = None) -> str:
+def _build_user_prompt(
+    payload: dict[str, Any], settings, previous_journals: list[tuple[str, str]] | None = None
+) -> str:
     now = now_local()
     date_header = format_date_pt_br(now)
     meta = {
@@ -107,10 +129,14 @@ def _build_user_prompt(payload: dict[str, Any], settings, previous_journal_text:
     }
 
     previous_context = ""
-    if previous_journal_text and previous_journal_text.strip():
-        previous_context = (
-            f"\n\n<PREVIOUS_DAY_JOURNAL>\n{previous_journal_text.strip()}\n</PREVIOUS_DAY_JOURNAL>"
+    if previous_journals:
+        blocks = "\n\n".join(
+            f"<JOURNAL date=\"{day}\">\n{text.strip()}\n</JOURNAL>"
+            for day, text in previous_journals
+            if text and text.strip()
         )
+        if blocks:
+            previous_context = f"\n\n<RECENT_JOURNALS>\n{blocks}\n</RECENT_JOURNALS>"
 
     return (
         "Create today's personal morning journal from this JSON payload.\n\n"
@@ -188,12 +214,14 @@ def _generate_once(model: str, user_prompt: str, settings) -> str:
     return content
 
 
-def generate_journal(payload: dict[str, Any], settings, previous_journal_text: str | None = None) -> str:
+def generate_journal(
+    payload: dict[str, Any], settings, previous_journals: list[tuple[str, str]] | None = None
+) -> str:
     if not settings.llm_api_key:
         logger.warning("Chave de API não configurada; usando fallback journal")
         return _fallback_journal(payload, settings)
 
-    user_prompt = _build_user_prompt(payload, settings, previous_journal_text)
+    user_prompt = _build_user_prompt(payload, settings, previous_journals)
 
     # Um 503 do Gemini é sobrecarga do modelo e costuma durar minutos, não segundos: o intervalo
     # fixo de 10s gastava as três tentativas em menos de um minuto e caía no fallback.

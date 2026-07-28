@@ -7,12 +7,14 @@ import asyncio
 import logging
 import re
 import sys
+from datetime import datetime
 from typing import Awaitable, Callable
 
 from config.settings import load_settings
 from core.ai_engine import generate_journal
 from core.telegram_sender import inspect_message, send_alert, send_journal
-from core.utils import ScraperResult, setup_logging, strip_html
+from core.utils import ScraperResult, now_local, setup_logging, strip_html
+from core import history as history_store
 from scrapers import (
     finance,
     football,
@@ -38,6 +40,27 @@ SCRAPERS: list[tuple[str, ScraperFn]] = [
 ]
 
 LAST_JOURNAL_FILE = "last_journal.txt"
+HISTORY_FILE = "history.json"
+
+
+def _load_history(settings, history_file, logger) -> dict:
+    """Carrega o histórico, migrando o `last_journal.txt` da versão anterior se preciso."""
+    history = history_store.load(history_file)
+    if history:
+        return history
+
+    legacy = settings.project_root / "logs" / LAST_JOURNAL_FILE
+    if not legacy.exists():
+        return {}
+
+    try:
+        text = legacy.read_text(encoding="utf-8")
+        day = datetime.fromtimestamp(legacy.stat().st_mtime).date()
+        logger.info("Migrando %s (de %s) para o histórico", LAST_JOURNAL_FILE, day)
+        return history_store.record({}, day, text, {})
+    except Exception as exc:
+        logger.warning("Falha ao migrar %s: %s", LAST_JOURNAL_FILE, exc)
+        return {}
 
 
 async def _run_scraper(name: str, fn: ScraperFn, settings) -> ScraperResult:
@@ -153,16 +176,20 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
         print(_dump_payload(payload))
         return 0
 
-    last_journal_file = settings.project_root / "logs" / LAST_JOURNAL_FILE
-    previous_journal_text = ""
-    if last_journal_file.exists():
-        try:
-            previous_journal_text = last_journal_file.read_text(encoding="utf-8")
-            logger.info("Previous journal context loaded successfully")
-        except Exception as exc:
-            logger.warning("Failed to read previous journal file: %s", exc)
+    history_cfg = settings.config.get("history") or {}
+    history_file = settings.project_root / "logs" / history_cfg.get("file", HISTORY_FILE)
+    retention_days = int(history_cfg.get("retention_days", history_store.DEFAULT_RETENTION_DAYS))
+    journals_in_prompt = int(
+        history_cfg.get("journals_in_prompt", history_store.DEFAULT_JOURNALS_IN_PROMPT)
+    )
 
-    journal_text = generate_journal(payload, settings, previous_journal_text)
+    history = _load_history(settings, history_file, logger)
+    history_store.enrich_payload(payload, history)
+
+    previous = history_store.recent_journals(history, journals_in_prompt)
+    logger.info("Histórico: %s dias guardados, %s jornais no prompt", len(history), len(previous))
+
+    journal_text = generate_journal(payload, settings, previous)
     logger.info("Journal generated (%s chars)", len(journal_text))
 
     if args.dry_run:
@@ -172,11 +199,16 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
     try:
         send_journal(journal_text, settings)
         logger.info("Journal sent to Telegram successfully")
+        # Só grava após envio bem-sucedido: um jornal que não chegou não deve contar como
+        # "já publicado" e suprimir as notícias dele amanhã.
         try:
-            last_journal_file.write_text(journal_text, encoding="utf-8")
-            logger.info("Current journal saved to last_journal.txt")
+            updated = history_store.record(
+                history, now_local().date(), journal_text, history_store.extract_metrics(payload)
+            )
+            history_store.save(history_file, updated, retention_days)
+            logger.info("Histórico atualizado (%s dias)", len(updated))
         except Exception as exc:
-            logger.warning("Failed to save current journal: %s", exc)
+            logger.warning("Failed to save history: %s", exc)
     except Exception as exc:
         logger.error("Failed to send journal: %s", exc)
         _notify(
