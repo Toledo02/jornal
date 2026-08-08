@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 from bs4 import BeautifulSoup
 
 from core.utils import BROWSER_HEADERS, ScraperResult, TIMEZONE, http_get_json, http_get_text
@@ -129,6 +130,18 @@ def _format_match(
     return f"{home} x {away} — {competition}{', ' + when if when else ''}"
 
 
+def _is_out_of_plan(exc: Exception) -> bool:
+    """403 da football-data.org significa "seu plano não cobre isso", não "deu erro".
+
+    A Seleção Brasileira joga Copa e amistosos, competições fora do plano gratuito, então o 403
+    é a resposta certa e definitiva — não vai mudar amanhã. Tratá-lo como falha fazia a seção
+    voltar `partial` todo santo dia e disparar o alerta de fontes com falha, que é exatamente o
+    mecanismo que a Fase 1 criou para não ser ignorado. Alerta é sobre resultado, não sobre fonte:
+    o time degrada para só-notícias em silêncio, igual ao que já acontece sem token.
+    """
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 403
+
+
 async def _team_matches(settings, team_id: int, status: str, limit: int) -> list[dict[str, Any]]:
     params = {"status": status, "limit": limit}
     body = await http_get_json(
@@ -224,6 +237,13 @@ async def fetch(settings) -> ScraperResult:
                         if (formatted := _format_match(match, status == "FINISHED", int(team_id), name))
                     ]
                 except Exception as exc:
+                    if _is_out_of_plan(exc):
+                        logger.info(
+                            "%s (%s): fora do plano da football-data.org; seguindo só com notícias",
+                            name,
+                            status.lower(),
+                        )
+                        continue
                     logger.warning("Jogos de %s (%s) falharam: %s", name, status, exc)
                     errors.append(f"{name} ({status.lower()}): {exc}")
 

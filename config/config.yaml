@@ -14,6 +14,31 @@ finance:
         headlines: "h2 a, h3 a"
         max_items: 5
 
+investments:
+  enabled: true
+  # Séries do SGS do Banco Central (api.bcb.gov.br) — públicas, sem chave e sem cota.
+  # `unit` diz como o valor chega: "a.a." anual, "a.m." mensal, "12m" acumulado em doze meses.
+  # Juro real e a anualização da poupança são calculados em Python (investments.py).
+  series:
+    selic:
+      code: 432
+      label: "Selic (meta)"
+      unit: "a.a."
+    cdi:
+      code: 4389
+      label: "CDI"
+      unit: "a.a."
+    ipca_12m:
+      code: 13522
+      label: "IPCA (12 meses)"
+      unit: "12m"
+    poupanca:
+      code: 195
+      label: "Poupança"
+      unit: "a.m."
+  profiles: ["conservador", "moderado", "arrojado"]
+  disclaimer: "Conteúdo informativo, não é recomendação de investimento."
+
 rss_feeds:
   tech:
     - "https://techcrunch.com/feed/"
@@ -46,12 +71,29 @@ gaming:
     type: "game"          # "game" | "loot" | "beta"
     max_items: 5
     platforms: ["pc", "steam", "epic", "gog", "drm-free", "itch"]
+    # Piso de valor: giveaway de US$ 0,99 ocupa a mesma linha de um de US$ 25 e não vale o
+    # clique. Quem está no último dia entra mesmo abaixo do piso.
+    min_worth_usd: 5
   cheapshark:
     enabled: true
-    max_deals: 5
-    min_savings_percent: 90
-    # Nota mínima na Steam (%). Sem isso, "ordenar por maior desconto" só traz shovelware.
-    min_steam_rating: 70
+    max_deals: 4
+    # Filtros de relevância, na ordem de eficácia observada. `Deal Rating` é a nota própria do
+    # CheapShark (desconto ponderado por qualidade); `sortBy: Savings` ordenava só pelo desconto
+    # e o topo dessa lista é estático — eram sempre os mesmos jogos obscuros.
+    sort_by: "Deal Rating"
+    # Só jogos com preço cheio a partir de US$ 29. É o corte mais eficaz contra shovelware,
+    # que nunca lançou nessa faixa.
+    aaa_only: true
+    # Nota mínima na Steam (%) e volume mínimo de avaliações: 95% de aprovação com 40 votos é
+    # ruído, e é assim que jogo obscuro passa por um filtro que olha só a nota.
+    min_steam_rating: 75
+    min_steam_reviews: 1000
+    # 0 no Metacritic significa "sem nota", não "nota ruim" — o filtro ignora esse caso.
+    min_metacritic: 70
+    min_savings_percent: 60
+    # Candidatos coletados além do que será exibido, para o corte anti-repetição
+    # (history.apply_repeat_policy) ter de onde tirar substituto.
+    candidate_pool: 16
 
 football:
   # Códigos de competição da football-data.org usados para descobrir o id dos times.
@@ -121,6 +163,9 @@ promotions:
   max_age_hours: 24
   per_channel: 5
   max_items: 10
+  # Teto por campanha: o mesmo cupom em cinco produtos tomava a seção inteira (num jornal real,
+  # 3 dos 4 achados eram o mesmo "OFERTA8DO8" do Mercado Livre).
+  max_per_coupon: 2
   noise_patterns:
     - "sorteio"
     - "participe do grupo"
@@ -143,11 +188,14 @@ history:
   # Quantos jornais anteriores vão no prompt para a regra anti-repetição. Cada um custa
   # ~1.500 tokens, então subir muito encarece sem ganho proporcional.
   journals_in_prompt: 3
+  # Por quantos dias um jogo ou oferta já publicado continua bloqueado. A regra do prompt não
+  # dá conta disso sozinha: o modelo não compara listas entre dias, só texto.
+  repeat_window_days: 7
 
 orchestrator:
   scraper_timeout_seconds: 30
   continue_on_scraper_failure: true
-  # Com 9 fontes, enviar um jornal de uma seção só não vale a chamada ao LLM.
+  # Com 10 fontes, enviar um jornal de uma seção só não vale a chamada ao LLM.
   min_sections_for_send: 4
   request_timeout_seconds: 15
 

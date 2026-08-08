@@ -22,7 +22,7 @@ python main.py                        # pipeline completo (envia ao Telegram)
 python main.py --dry-run              # gera e imprime, sem enviar
 python main.py --no-llm               # só coleta e imprime o payload, sem gastar requisição
 python main.py --only gaming,finance  # subconjunto de scrapers
-python -m pytest -q                   # 66 testes, sem rede
+python -m pytest -q                   # 127 testes, sem rede
 ```
 
 Ao iterar em scrapers use `--no-llm --only <scraper>`: não consome cota do Gemini nem envia mensagem.
@@ -71,9 +71,61 @@ já custaram bug: só `<b>`, `<i>` e `<a href>`; bullets com `•` (o modelo rec
 não mandarem o contrário, e `*` aparece literal em HTML); a regra anti-repetição é escopada às
 seções de notícia — Clima e Economia são exemplos de conteúdo que **deve** repetir todo dia.
 
+**Título de seção não tem tamanho de fonte.** O Telegram não expõe nada equivalente a `<h2>`: o
+subset dele tem só negrito, itálico, sublinhado, tachado, código e link. O que faz um cabeçalho
+parecer cabeçalho é a convenção do prompt — régua `━━━━━━━━━━━━━━━`, título em CAIXA ALTA dentro de
+`<b>`, linha em branco antes do conteúdo. Tag de heading no output é convertida em quebra de linha
+pelo sanitizador, então pedir `<h2>` ao modelo não falha: só apaga o título.
+
+**Seções lidas por tópico.** Clima e Investimentos são consultados de relance, não lidos como
+parágrafo — cada fato tem seu bullet com rótulo em negrito, e as strings chegam prontas do Python
+(`rain_summary`, `sun_summary`, `uv_summary`, `talking_points`).
+
 **Números vêm formatados de Python, não do LLM.** Cada ativo em `finance` carrega um campo `display`
 já em pt-BR, e o prompt manda copiá-lo literalmente. Modelo formatando número produz `R$ 0.0034278`,
 e pior: em produção ele chegou a calcular uma variação percentual do IBOVESPA que ninguém pediu.
+
+**A sugestão de investimento não é opinião do modelo.** [investments.py](scrapers/investments.py) lê
+as séries do SGS do Banco Central (Selic, CDI, IPCA, poupança — públicas, sem chave) e calcula em
+Python o juro real (Fisher, não subtração: 13,90 − 4,64 dá 9,26 e o certo é 8,85) e a anualização da
+poupança. O que vai ao prompt é `talking_points`, uma lista de afirmações já redigidas com os números
+formatados; o modelo escolhe e reescreve, mas o prompt proíbe que ele produza número, projeção ou
+rendimento próprio, cite ativo específico, corretora ou emissor, e exige o disclaimer no fim.
+
+**Duas anti-repetições, e elas não são intercambiáveis.** A escolha entre uma e outra depende de
+o payload ser igual ou não ao que se publica:
+
+* **Jogos** — `apply_repeat_policy` compara *conjuntos de títulos*, porque o payload é trimado para
+  exatamente o que vai ao ar (4 ofertas), então registrar o oferecido é registrar o publicado.
+* **Notícias e promoções** — `filter_published_items` compara *nomes próprios contra o texto dos
+  jornais recentes*. Aqui o payload traz 15 candidatos e o modelo publica 3, então guardar os
+  títulos oferecidos apagaria 12 matérias que nunca saíram. A comparação é por proporção
+  (`min_ratio`), não exata: o feed diz "EUA" onde o jornal escreveu "Estados Unidos", e verbo em
+  início de frase entra em maiúscula como se fosse nome ("Morre pai de Messi"). Só o nome próprio
+  atravessa a tradução — metade dos feeds é em inglês e o jornal sai em português.
+  Três travas contra apagar notícia legítima: nomes presentes em *todos* os jornais recentes são
+  pano de fundo e são ignorados ("Brasil", "Athletico"); pelo menos dois nomes precisam coincidir
+  de fato; e a seção nunca cai abaixo do mínimo — ficar sem a seção Mundo é pior que repetir.
+
+**Janela de chuva olha para frente e para o pico.** `_rain_window` recebe a hora atual e descarta o
+que já passou: o jornal chega às 5h55 e avisar sobre a chuva das 0h é descrever a madrugada que a
+pessoa dormiu. Entre os blocos que restam vence o de maior pico, não o primeiro — em 08/08/2026 os
+47% da madrugada escondiam os 100% das 15h. Bloco longo demais é estreitado para o miolo, porque
+"chuva entre 5h e 23h" não é aviso; `rain_all_day` preserva a diferença entre "chove à tarde" e
+"chove o dia todo, mais forte à tarde".
+
+**403 da football-data.org não é falha, é plano.** A Seleção joga competições fora do plano
+gratuito, então o 403 é definitivo e chegava todo dia como `partial` — disparando justamente o
+alerta que a Fase 1 criou para não ser ignorado. `_is_out_of_plan` degrada o time para só-notícias
+em silêncio. Outros códigos HTTP continuam sendo falha.
+
+**Rodízio de jogos é decisão de conjunto, resolvida em Python.** A regra anti-repetição do prompt
+compara texto e não dá conta de listas: os mesmos jogos voltavam todo dia com outra redação.
+`apply_repeat_policy` ([core/history.py](core/history.py)) usa os títulos já publicados, guardados em
+`highlights`. Ofertas pagas repetidas são descartadas e substituídas pelas próximas da fila — por
+isso o scraper devolve `candidate_pool` (16) candidatos e só `max_deals` (4) são exibidos. Giveaways
+repetidos ficam quando estão acabando: "termina amanhã" é justamente a informação que só serve no dia
+em que o item já apareceu antes. Prazos são calculados em Python (`_days_until`), nunca pelo modelo.
 
 **A cadeia de cotações preenche ativo a ativo**, não tudo-ou-nada
 ([finance.py](scrapers/finance.py)): HG Brasil → yfinance → AwesomeAPI, cada fonte cobrindo o que
@@ -110,7 +162,11 @@ ignorar os alertas. `_fetch_quotes` só reporta o que ficou faltando no fim.
 **Promoções vêm de canais do Telegram**, lidos via `https://t.me/s/<canal>` — a prévia web pública,
 sem bot e sem token ([promotions.py](scrapers/promotions.py)). O monitoramento de produto por
 Buscapé é secundário e opcional; Mercado Livre e Magalu bloqueiam, e o Zoom devolve o mesmo
-catálogo do Buscapé.
+catálogo do Buscapé. **O link publicado é o do post no canal (`link`), não o da loja
+(`store_url`)**: boa parte das ofertas só vale com cupom, e o cupom está no post — mandar direto
+para a loja faz você pagar o preço cheio. `_coupon` extrai o código quando ele aparece na prévia, e
+`max_per_coupon` impede que uma campanha só tome a seção (num jornal real, 3 dos 4 achados eram o
+mesmo `OFERTA8DO8`).
 
 **Futebol separa jogo de notícia.** A API football-data.org dá adversário, data e placar; o GE dá
 notícia, filtrada por `relevance_keywords` ([config.yaml](config/config.yaml)). Sem o token a seção

@@ -333,6 +333,149 @@ Motivada pela leitura do jornal em produção: os dados chegavam, mas pouco proc
 ### Ainda em aberto
 
 - [ ] Revogar já foi feito; **apagar os logs antigos** da VPS que contêm o token antigo (item 0.3).
-- [ ] Avaliar `min_steam_rating` mais alto: mesmo com 70, as ofertas pagas do CheapShark ainda
+- [x] Avaliar `min_steam_rating` mais alto: mesmo com 70, as ofertas pagas do CheapShark ainda
   são de jogos obscuros. Os giveaways da GamerPower cobrem a seção, então talvez valha reduzir o
-  peso das ofertas pagas.
+  peso das ofertas pagas. → resolvido na Rodada 3 (item R3.4), por outro caminho: o problema não
+  era a nota, era a ordenação.
+
+---
+
+## Rodada 3 — leitura e relevância (08/08/2026)
+
+Motivada pela leitura diária: a informação chegava correta, mas em bloco, e duas seções traziam
+sempre o mesmo conteúdo.
+
+- [x] **R3.1 Clima por tópico.** A seção era um parágrafo corrido, e achar a chance de chuva exigia
+  ler a frase inteira. Agora é um bullet por tópico (agora, máxima e mínima, chuva, sol, vento, UV),
+  com as strings montadas em Python — `rain_summary`, `sun_summary` e `uv_summary` em
+  [weather.py](scrapers/weather.py). Mesma razão do campo `display` das cotações: texto pronto não
+  dá margem para o modelo reformatar número.
+
+- [x] **R3.2 Cabeçalho de seção com cara de cabeçalho.** ⚠️ **O Telegram não tem tamanho de fonte.**
+  O subset HTML dele é `<b> <i> <u> <s> <code> <pre> <a>` e mais nada — não existe `<h2>`, `<h3>`,
+  `<font>` nem CSS, e uma tag de heading que chegue ao sanitizador vira quebra de linha
+  ([telegram_sender.py](core/telegram_sender.py), `BLOCK_TAGS`), ou seja, o título sumiria.
+  O que dá para fazer, e foi feito: régua `━━━━━━━━━━━━━━━`, título em CAIXA ALTA dentro de `<b>` e
+  uma linha em branco antes do conteúdo. Visualmente separa as seções; tecnicamente a fonte continua
+  do mesmo tamanho, porque não há como mudá-la.
+
+- [x] **R3.3 Seção de sugestão de investimentos.** Novo scraper
+  [investments.py](scrapers/investments.py), lendo as séries do SGS do Banco Central (públicas, sem
+  chave, sem cota): Selic 432, CDI 4389, IPCA 12m 13522, poupança 195. Juro real e anualização da
+  poupança são calculados em Python — o juro real usa Fisher, não subtração (13,90 − 4,64 daria
+  9,26; o correto é 8,85, e o erro é pequeno o bastante para nunca ser notado no jornal).
+  O prompt recebe `talking_points` já redigidos e tem regra explícita: nada de calcular rendimento,
+  citar ativo específico, corretora ou emissor, ou mandar comprar — só classe de ativo, mais o
+  disclaimer no fim da seção.
+
+- [x] **R3.4 Filtro de jogos.** Duas causas distintas, tratadas separado:
+  - **Irrelevância** era a ordenação. `sortBy=Savings` ordena por desconto puro, e o topo dessa
+    lista é estático justamente porque ninguém compra aqueles jogos. Trocado por
+    `sortBy=Deal Rating` (a nota do próprio CheapShark, que pondera desconto e qualidade) mais
+    `AAA=1` (preço cheio ≥ US$ 29), `steamRating=75`, `min_steam_reviews: 1000` e
+    `min_metacritic: 70`. Antes: *Ship Graveyard Simulator*, *3 Stars of Destiny*, *Asguaard*.
+    Depois: The Witcher 3, Disco Elysium, Civilization VI, BioShock Infinite.
+    Nota alta sozinha não bastava — 95% de aprovação com 40 votos é ruído, e era assim que jogo
+    obscuro passava pelo filtro de nota que existia desde a Fase 7.2.
+  - **Repetição** não era resolvível no prompt: o modelo compara texto, não listas, e o mesmo jogo
+    voltava reescrito. Agora `apply_repeat_policy` ([core/history.py](core/history.py)) guarda os
+    títulos publicados em `highlights` e faz o rodízio em Python. Oferta paga repetida é descartada
+    e substituída (o scraper devolve 16 candidatos para exibir 4); giveaway repetido fica só quando
+    está acabando, porque "termina amanhã" é útil exatamente no dia em que o item já apareceu antes.
+    Os prazos (`_days_until`) são calculados em Python, pelo mesmo motivo do item 6.4.
+  - Na GamerPower, `min_worth_usd: 5` corta o giveaway de US$ 0,99 — que ocupa a mesma linha de um
+    de US$ 25 —, com exceção de quem está no último dia.
+
+- [x] **R3.5 Promoção aponta para o canal, não para a loja.** Boa parte das ofertas dos canais só
+  vale com cupom, e o cupom está no post. O link ia direto para a loja, então quem clicava pagava o
+  preço cheio. Agora o payload traz `link` (o permalink do post) como campo canônico, `store_url`
+  como referência, e `_coupon` extrai o código quando ele aparece na prévia — o prompt manda
+  destacá-lo em negrito. Validado em produção: `OFERTA8DO8`, `INFLU350`, `BELEZA8DO8`.
+
+### Consequência a acompanhar (Rodada 3)
+
+O jornal cresceu de ~3.5k para ~5.8k caracteres — uma seção nova e mais estrutura por seção — e
+passou a sair em **duas mensagens** do Telegram. O split é ciente de HTML (Fase 4.1) e não quebra
+marcação, mas a leitura fica pior. O prompt já foi apertado (limite por seção, um fato por bullet,
+teto de 5000) e derrubou ~22%; se incomodar, os candidatos a corte são GitHub Trending (5 repos) e
+Cultura Pop.
+
+---
+
+## Rodada 4 — relevância e ruído (08/08/2026)
+
+Feita na sequência da Rodada 3, a partir do que os testes daquele dia expuseram.
+
+- [x] **R4.1 A janela de chuva apontava para o passado — e para a chuva errada.** Confirmado com os
+  dados reais de Curitiba em 08/08: `[00h:47, 01h:42, 02h:31, ..., 13h:83, 14h:94, 15h:100, 16h:95,
+  17h:85, ...]`. `_rain_window` devolvia o **primeiro** bloco acima do limiar e parava no primeiro
+  buraco, então travava no resmungo de 47% da madrugada; o jornal daquele dia imprimiu
+  "mais provável entre 0h-1h" — uma janela que já tinha passado quando a mensagem chegou, e que
+  ignorava a chuva de verdade da tarde. Corrigido em três frentes
+  ([weather.py](scrapers/weather.py)): descarta horas anteriores à atual, escolhe o bloco de maior
+  pico e estreita o bloco longo demais para o miolo ("chuva entre 5h e 23h" não é aviso).
+  `rain_all_day` preserva a diferença entre "chove à tarde" e "chove o dia todo, mais forte à
+  tarde". Hoje sai: *"100% de chance, 3,1 mm previstos, chuva praticamente o dia todo, mais forte
+  entre 15h-17h"*.
+
+- [x] **R4.2 O futebol garantia um alerta por dia.** O 403 da Seleção não é intermitente: o plano
+  gratuito da football-data.org não cobre as competições dela, então a resposta é definitiva. A
+  seção voltava `partial` todo dia e disparava o "🩺 fontes com falha" — o mecanismo que a Fase 1
+  criou justamente para não ser ignorado. `_is_out_of_plan` ([football.py](scrapers/football.py))
+  trata 403 como falta de cobertura e degrada o time para só-notícias em silêncio, igual ao que já
+  acontecia sem token. Outros códigos HTTP continuam sendo falha. Verificado: `status=ok`, sem
+  alerta, dados do Athletico intactos.
+
+- [x] **R4.3 Anti-repetição de notícia em Python.** Mesma fraqueza estrutural dos jogos: a regra 12
+  do prompt pede ao modelo que compare a matéria de hoje com três jornais em prosa, e ele compara
+  mal. **Mas a solução dos jogos não servia aqui** — lá o payload é trimado para exatamente o que
+  vai ao ar, então registrar o oferecido é registrar o publicado; nas notícias o payload traz 15
+  candidatos e o modelo publica 3, e guardar os títulos oferecidos apagaria 12 matérias que nunca
+  saíram. `filter_published_items` ([core/history.py](core/history.py)) compara os **nomes próprios
+  do título contra o texto dos jornais recentes**: substantivo comum não sobrevive à tradução
+  (metade dos feeds é em inglês), nome próprio sobrevive.
+  Exigir coincidência exata deixava o filtro inerte — o título diz "EUA" onde o jornal escreveu
+  "Estados Unidos", e verbo em início de frase entra em maiúscula como se fosse nome ("Morre pai de
+  Messi"). Por isso a correspondência é por proporção. Validado com o RSS real: removeu as duas
+  matérias sobre o Estreito de Ormuz e as duas sobre a morte do pai do Messi (uma delas em inglês),
+  sem falso positivo.
+
+- [x] **R4.4 Uma campanha tomava a seção de promoções.** 3 dos 4 achados do jornal eram o mesmo
+  cupom `OFERTA8DO8`. `max_per_coupon: 2` ([config.yaml](config/config.yaml)) limita por campanha, e
+  as promoções entraram no `filter_published_items` — o produto anunciado ontem sai, outro produto
+  da mesma loja fica.
+
+- [x] **R4.5 Testes do caminho de fallback.** `_fallback_journal` é o que roda no pior dia (em
+  01/07 as três tentativas do Gemini falharam e ele foi realmente enviado) e não tinha teste nenhum.
+  Novo módulo [tests/test_quality.py](tests/test_quality.py), separado do `test_parsers.py` porque a
+  pergunta é outra: não "isto formata certo?", mas "dado o que as fontes trouxeram e o que já foi
+  publicado, o que sobra?". A propriedade central testada é que o fallback atravessa o
+  `sanitize_html` **intacto** — foi ela que o item 4.4 quebrou.
+
+- [x] **R4.6 Fuso do histórico.** `prune` e `_highlight_counts` usavam `date.today()` (do servidor)
+  enquanto `record` grava com `now_local()`. Com cron às 5h55 as datas coincidem, mas a janela
+  deslizaria meio dia numa VPS em UTC. Unificado em `now_local()`.
+
+- [x] **R4.7 Jornal antigo passando por recente.** Descoberto ao medir o payload: `recent_journals`
+  devolve os N mais recentes **sem olhar a data**, então depois de uma interrupção do cron o jornal
+  de um mês atrás entraria como se fosse o de ontem — e agora que ele suprime notícia, isso deixou
+  de ser inofensivo. `filter_published_items` limita por idade além de por quantidade.
+
+### Medição: cortar o payload de notícias não vale a pena
+
+Item levantado e **descartado com número**. Payload real de 08/08, 42.885 caracteres (~10,7k tokens):
+
+| seção | chars | % |
+|---|---|---|
+| pop_culture | 8.319 | 19,4% |
+| tech_news | 8.184 | 19,1% |
+| world_news | 7.957 | 18,6% |
+| gaming | 7.486 | 17,5% |
+| promotions | 4.754 | 11,1% |
+| demais (finance, investments, football, github, weather) | 6.031 | 14,1% |
+
+As notícias são 57% do payload e os `summary` são 40% desse bloco — mas a mediana de um summary é
+190 caracteres e só 5 de 45 encostam no teto de 400. Cortar em 220 economizaria 5,2% do payload;
+cortar em 150, agressivo o bastante para prejudicar o contexto, economizaria 8,7%. Para um modelo de
+1M de contexto na cota gratuita, não paga o risco. E depois do R4.3 ter mais candidatos passou a
+valer **mais**, não menos: o filtro consome candidatos antes do modelo escolher.

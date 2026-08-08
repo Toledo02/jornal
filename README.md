@@ -113,20 +113,25 @@ treinaria você a ignorar os alertas.
 ## Histórico
 
 `logs/history.json` guarda 30 dias (`history.retention_days`), podados a cada gravação. Serve a
-duas coisas: os 3 jornais mais recentes vão ao prompt para a regra anti-repetição, e as métricas
-numéricas alimentam o contexto comparativo — `R$ 5,60 (+0,10%) — maior valor em 30 dias`.
+três coisas: os 3 jornais mais recentes vão ao prompt para a regra anti-repetição, as métricas
+numéricas alimentam o contexto comparativo — `R$ 5,60 (+0,10%) — maior valor em 30 dias` — e os
+títulos já publicados alimentam o rodízio de jogos (`history.repeat_window_days`), que é o que
+impede a mesma oferta de voltar todo dia.
 
 ## Módulos de dados
 
-1. **Clima** — Open-Meteo
+1. **Clima** — Open-Meteo, entregue por tópico (agora, máx/mín, chuva, sol, vento, UV)
 2. **Economia** — HG Brasil → yfinance → AwesomeAPI, preenchendo ativo a ativo
-3. **Tech** — RSS
-4. **Mundo** — RSS (LLM seleciona 3 fatos globais)
-5. **Cultura Pop** — RSS
-6. **GitHub Trending** — scraping
-7. **Gaming** — CheapShark, filtrado por nota da Steam
-8. **Futebol** — jogos via football-data.org + notícias filtradas do GE
-9. **Promoções** — canais públicos do Telegram + monitoramento opcional de produtos
+3. **Investimentos** — séries do Banco Central (SGS): Selic, CDI, IPCA e poupança, com juro real
+   calculado em Python
+4. **Tech** — RSS
+5. **Mundo** — RSS (LLM seleciona 3 fatos globais)
+6. **Cultura Pop** — RSS
+7. **GitHub Trending** — scraping
+8. **Gaming** — giveaways da GamerPower + ofertas do CheapShark, filtradas por nota, volume de
+   avaliações e faixa de preço, com rodízio entre dias
+9. **Futebol** — jogos via football-data.org + notícias filtradas do GE
+10. **Promoções** — canais públicos do Telegram + monitoramento opcional de produtos
 
 ## Deploy na VPS (cron)
 

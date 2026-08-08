@@ -22,87 +22,137 @@ Rules:
 1. Output ONLY the final journal text formatted in HTML compatible with Telegram.
    - Use <b>text</b> for bold and <i>text</i> for italics. No other formatting tags exist.
    - Never use Markdown asterisks (*) or underscores (_) — they render literally in Telegram.
-   - Never use <br>, <p>, <ul> or <li>. Separate blocks with literal blank lines (\\n\\n).
+   - Never use <br>, <p>, <ul>, <li> or heading tags. Separate blocks with literal blank lines.
    - For bullet points use the character "•" at the start of the line. This is the ONLY
      acceptable bullet marker; "*" and "-" are forbidden.
-   - Leave one blank line between a section header and its content, and two blank lines before
-     the next section emoji.
 2. Write in pt-BR with a clear, informative tone.
 3. Start the journal with the EXACT date header provided in metadata.date_header_pt_br. Copy it
-   verbatim as the first line — do not invent or alter the date.
-4. SECTION STRUCTURE — use EXACTLY these sections, with these exact titles, in this exact order.
+   verbatim as the first line, wrapped in <b>...</b> — do not invent or alter the date.
+4. SECTION HEADERS — every section starts with a header block written EXACTLY like this, and
+   nothing else may appear on those two lines:
+
+   ━━━━━━━━━━━━━━━
+   <b>🌦️ CLIMA</b>
+
+   That is: a line with the rule "━━━━━━━━━━━━━━━", then the title line in <b>, the title always
+   in UPPERCASE, then one blank line before the content. Telegram has no font-size control, so
+   uppercase + bold + the rule above is what makes a header read as a heading. Never write a
+   header as plain sentence case, never put content on the header line.
+5. SECTION STRUCTURE — use EXACTLY these sections, with these exact titles, in this exact order.
    Never add, rename, remove, split or reorder a section. If a section has no data, omit it
-   entirely (see rule 7) rather than inventing a replacement.
-   - 🌦️ Clima
-   - 💵 Economia & Investimentos
-   - 💻 Tecnologia & Dev
-   - 🌍 Mundo
-   - 🎬 Cultura Pop & Entretenimento
-   - 🎮 Ofertas & Games Grátis
-   - ⚽ Futebol
-   - 🛒 Achados & Promoções
-   - 📚 Neste Dia na História
-5. SECTION CONTENT:
-   - Clima: write a short, practical paragraph. Lead with the current condition and temperature,
-     then the range for the day. If "rain_window" is present, state plainly when it will rain
-     ("chuva provável entre 16h e 19h") — that is the most useful fact in the section. If it is
-     null, do not speculate about rain. Always close with sunrise and sunset times. Mention the
-     UV index only when uv_label is "alto" or above. Never invent values not present in the data.
-     Temperature, wind and range arrive already formatted in "temp_now", "feels_like", "wind" and
-     "temp_range" — copy those strings verbatim; do not rewrite the numbers.
-   - Economia: present USD, EUR, ARS, BTC and IBOVESPA as bullet points, never as running text.
+   entirely (see rule 8) rather than inventing a replacement.
+   - 🌦️ CLIMA
+   - 💵 ECONOMIA
+   - 📈 IDEIAS DE INVESTIMENTO
+   - 💻 TECNOLOGIA & DEV
+   - 🌍 MUNDO
+   - 🎬 CULTURA POP & ENTRETENIMENTO
+   - 🎮 OFERTAS & GAMES GRÁTIS
+   - ⚽ FUTEBOL
+   - 🛒 ACHADOS & PROMOÇÕES
+   - 📚 NESTE DIA NA HISTÓRIA
+6. SECTION CONTENT — sections marked "by topic" are read at a glance, so each fact gets its own
+   bullet with a bold label. Never merge those into a paragraph.
+   - CLIMA (by topic): one bullet per topic, in this order, using ONLY the preformatted strings
+     from the payload — copy them verbatim and never rewrite a number:
+       • <b>Agora:</b> "condition_now", "temp_now" and then "(sensação de X)" with "feels_like"
+       • <b>Máxima e mínima:</b> "temp_max" e "temp_min" (in that order)
+       • <b>Chuva:</b> "rain_summary". Omit the bullet when it is null; never speculate about rain.
+       • <b>Sol:</b> "sun_summary"
+       • <b>Vento:</b> "wind" — include only when the value is present
+       • <b>Índice UV:</b> "uv_summary" — include ONLY when uv_label is "alto", "muito alto" or
+         "extremo"
+     If "vs_ontem" is present, append it to the "Máxima e mínima" bullet.
+   - ECONOMIA: present USD, EUR, ARS, BTC and IBOVESPA as bullet points, never as running text.
      Each asset carries a preformatted "display" field — copy that string EXACTLY, including the
      percentage in parentheses. Never reformat a number, never convert currency, and never compute
-     a percentage yourself. If an asset has no "display" field, omit that bullet.
-   - Tecnologia & Dev: top tech news, followed by the GitHub trending repositories.
-   - Mundo: EXACTLY 3 most relevant global facts (wars, macroeconomics, historic events). Ignore
+     a percentage yourself. If an asset has no "display" field, omit that bullet. Close with at
+     most one short line about the market headlines, when there are any.
+   - IDEIAS DE INVESTIMENTO: built from the "investments" payload, which is data about interest
+     rates — not a portfolio.
+       • Open with one bullet listing the reference rates, copying the "display" of each indicator
+         in "indicators" (e.g. "• <b>Referências:</b> Selic 14,00% a.a. · CDI 13,90% a.a. ·
+         IPCA 4,64% em 12 meses").
+       • Then ONE bullet per profile in "profiles", labelled in bold ("• <b>Conservador:</b> ...").
+         Each is at most two sentences describing what class of asset makes sense at these rates
+         and why, in plain language.
+       • Every numeric claim MUST come from "talking_points", "derived" or "indicators" — copy the
+         numbers as formatted there. NEVER compute a yield, a projection or a percentage yourself,
+         and never state how much money something would return.
+       • Speak about CLASSES of asset only (Tesouro Selic, CDB de liquidez diária, Tesouro IPCA+,
+         fundos de índice amplos, reserva em dólar). NEVER name a specific stock, ticker,
+         cryptocurrency to buy, broker, fund or issuer, and never tell the reader to buy or sell.
+         Use "faz sentido considerar", not "compre".
+       • The "arrojado" bullet may reference the IBOVESPA or Bitcoin variation from the "finance"
+         payload as context, but must not predict where any price is going.
+       • Close the section with the "disclaimer" string in <i>italics</i>, on its own line.
+   - TECNOLOGIA & DEV: the 3 most relevant tech news, followed by at most 3 GitHub trending
+     repositories.
+   - MUNDO: EXACTLY 3 most relevant global facts (wars, macroeconomics, historic events). Ignore
      clickbait.
-   - Cultura Pop: prioritise major film/streaming releases, anime, book adaptations and updates on
-     competitive scenes or MOBA/tactical game patches. Ignore rumours, minor delays and celebrity
-     gossip.
-   - Ofertas & Games Grátis: the "free_games" list comes FIRST and is the point of the section —
-     these are real giveaways. For each, give the title, the platform, what it is worth, and when
-     it ends if known. Then, only if there is room, add a few "deals" (paid discounts) as a
-     secondary block. Deal prices are in US dollars from international stores: write them as
-     "US$ 0,71" and never convert to reais. If "free_games" is empty, still show the deals; if
-     both are empty, omit the whole section.
-   - Futebol: lead with "next_matches" (opponent, competition, day and kick-off time) — that is
+   - CULTURA POP: at most 3 items. Prioritise major film/streaming releases, anime, book
+     adaptations and updates on competitive scenes or MOBA/tactical game patches. Ignore rumours,
+     minor delays and celebrity gossip.
+   - OFERTAS & GAMES GRÁTIS: the "free_games" list comes FIRST and is the point of the section —
+     these are real giveaways. At most 4 of them, one bullet each with the title in bold, the
+     platform, what it is worth, and the "ends_in" string when present (copy it verbatim; never
+     compute a deadline yourself and never write "ontem"/"hoje"/"amanhã" from a raw date). An item
+     with "is_new": false has already appeared in a previous journal: keep it only when it is
+     ending, and then say so plainly. Then add at most 3 "deals" (paid discounts) as a secondary
+     block; those are already filtered for quality, so mention the Steam rating when available.
+     Deal prices are in US dollars from international stores: write them as "US$ 0,71" and never
+     convert to reais. If "free_games" is empty, still show the deals; if both are empty, omit the
+     whole section.
+   - FUTEBOL: lead with "next_matches" (opponent, competition, day and kick-off time) — that is
      the point of the section. Then "last_matches" with the score. Those strings are already
      formatted: copy them, do not reword the dates. Finally summarise "news" briefly. The news
      items carry NO date, so never write "ontem", "hoje" or "amanhã" about them — only the match
      strings have reliable dates.
-   - Achados & Promoções: "offers" are deals curated by Telegram channels, already in reais —
-     copy the prices as they appear and never convert or recalculate. Pick the most interesting
-     ones and write one bullet each, with a short description and the price. "products" is the
-     personal price watch: mention an item only when "alert" is true or "change_percent" is
-     negative, stating the previous and current price.
-   - Neste Dia na História: one concise historical fact for today's calendar day and month, from
-     your own knowledge.
-6. LINKS: HTML links (<a href="URL">Text</a>) are allowed EXCLUSIVELY in:
-   - Ofertas & Games Grátis and Achados & Promoções, as <a href="URL">[Resgatar]</a> or
-     <a href="URL">[Ver Oferta]</a> at the end of each item. For a promotion, prefer the "url"
-     field; fall back to "permalink" when "url" is null.
-   - GitHub Trending, as "...descrição do repo. <a href="URL">[Ver Repo]</a>".
-   No links anywhere else — Mundo, Tecnologia (news), Economia, Cultura Pop and Futebol must be
-   pure text. No loose URLs anywhere.
-7. OMITTING SECTIONS: omit entirely any section whose data failed (_error) or is empty (no items,
+   - ACHADOS & PROMOÇÕES: "offers" are deals curated by Telegram channels, already in reais —
+     copy the prices as they appear and never convert or recalculate. Pick the 4 most interesting
+     ones and write one bullet each, with a short description and the price. When "coupon" is
+     present, state the code in bold at the end of the description ("cupom <b>BLACK20</b>").
+     "products" is the personal price watch: mention an item only when "alert" is true or
+     "change_percent" is negative, stating the previous and current price.
+   - NESTE DIA NA HISTÓRIA: ONE historical fact for today's calendar day and month, from your own
+     knowledge, in a single sentence.
+7. LINKS: HTML links (<a href="URL">Text</a>) are allowed EXCLUSIVELY in:
+   - OFERTAS & GAMES GRÁTIS, at the end of each item, using the "url" field:
+     <a href="URL">[Resgatar]</a> for a giveaway from "free_games", and
+     <a href="URL">[Ver Oferta]</a> for a paid discount from "deals".
+   - ACHADOS & PROMOÇÕES, as <a href="URL">[Ver no canal]</a> at the end of each item, using the
+     "link" field and NOTHING ELSE. That link points to the post in the Telegram channel, which is
+     where the coupon and the instructions are — linking straight to the store makes the reader pay
+     full price. Never use "store_url", and never emit two links for the same offer.
+   - GITHUB TRENDING, as "...descrição do repo. <a href="URL">[Ver Repo]</a>".
+   No links anywhere else — MUNDO, TECNOLOGIA (news), ECONOMIA, IDEIAS DE INVESTIMENTO, CULTURA POP
+   and FUTEBOL must be pure text. No loose URLs anywhere.
+8. OMITTING SECTIONS: omit entirely any section whose data failed (_error) or is empty (no items,
    no deals, no products). Do not write "nenhuma oferta hoje" or similar filler — just leave the
    section out. For partial sections (_warning), include the available data without commenting on
    the failure.
-8. Target 2000-3500 characters total.
-9. Do not invent facts not present in the input data. The only exception is "Neste Dia na
-   História", which uses your own historical knowledge.
-10. Do not wrap the output in code fences.
-11. ANTI-REPETITION POLICY:
+9. LENGTH: 4000-5000 characters, with 5000 as a hard ceiling. What keeps it inside the budget:
+   - Every news bullet is ONE sentence of at most 25 words, stating the fact directly. Do not open
+     a bullet with a bold topic label ("<b>Crise no Irã:</b> ..."); start with the fact itself.
+   - Each profile bullet in IDEIAS DE INVESTIMENTO is ONE sentence.
+   - No introductory sentence for a section, no closing remark, no commentary about the journal
+     itself, no "vale acompanhar" filler.
+   - If everything does not fit, cut items from the end of the news sections — never drop a whole
+     section and never truncate mid-sentence.
+   Never leave a space before punctuation, including right after a closing tag.
+10. Do not invent facts not present in the input data. The only exception is "NESTE DIA NA
+    HISTÓRIA", which uses your own historical knowledge.
+11. Do not wrap the output in code fences.
+12. ANTI-REPETITION POLICY:
     - The tag <RECENT_JOURNALS> contains the journals of the previous days, each with its date.
       A story may only reappear if it is genuinely new or has evolved since ALL of them.
-    - This policy applies ONLY to these news sections: Tecnologia & Dev, Mundo, Cultura Pop &
-      Entretenimento, and Futebol. Do not repeat a story already covered yesterday unless there is
+    - This policy applies ONLY to these news sections: TECNOLOGIA & DEV, MUNDO, CULTURA POP &
+      ENTRETENIMENTO, and FUTEBOL. Do not repeat a story already covered yesterday unless there is
       a significant development, an impactful update, or the continuation of an ongoing event.
-    - This policy NEVER applies to Clima, Economia & Investimentos, Ofertas & Games Grátis,
-      Achados & Promoções or Neste Dia na História. Those are expected to look similar every day
-      and must ALWAYS be present regardless of yesterday's content. Never omit the weather or the
-      exchange rates because they resemble yesterday's.
+    - This policy NEVER applies to CLIMA, ECONOMIA, IDEIAS DE INVESTIMENTO, OFERTAS & GAMES
+      GRÁTIS, ACHADOS & PROMOÇÕES or NESTE DIA NA HISTÓRIA. Those are expected to look similar
+      every day and must ALWAYS be present regardless of yesterday's content. Never omit the
+      weather or the exchange rates because they resemble yesterday's.
 """
 
 # Erros que não melhoram com nova tentativa: modelo inexistente, chave inválida, prompt malformado.
@@ -152,15 +202,22 @@ def _fallback_journal(payload: dict[str, Any], settings) -> str:
     Sem marcação: a versão anterior usava asteriscos de Markdown e era enviada como HTML, então
     os asteriscos apareciam literalmente na mensagem. Texto puro atravessa o sanitizador intacto.
     """
-    lines = [format_date_pt_br(now_local()), "", "(modo fallback — o gerador de texto falhou)", ""]
+    lines = [format_date_pt_br(now_local()), "", "(modo fallback — o gerador de texto falhou)"]
+
+    def header(title: str) -> None:
+        lines.extend(["", "━━━━━━━━━━━━━━━", title, ""])
 
     weather = payload.get("weather") or {}
     if weather and not weather.get("_error"):
-        lines.append(
-            f"🌦️ Clima em {weather.get('city', '')}: "
-            f"mín {weather.get('temp_min_c')}°C, máx {weather.get('temp_max_c')}°C, "
-            f"chuva {weather.get('rain_probability_percent')}%"
-        )
+        header(f"🌦️ CLIMA — {weather.get('city', '')}")
+        for label, value in (
+            ("Agora", weather.get("temp_now")),
+            ("Máxima e mínima", f"{weather.get('temp_max')} / {weather.get('temp_min')}"),
+            ("Chuva", weather.get("rain_summary")),
+            ("Sol", weather.get("sun_summary")),
+        ):
+            if value and "None" not in str(value):
+                lines.append(f"• {label}: {value}")
 
     finance = payload.get("finance") or {}
     if finance and not finance.get("_error"):
@@ -175,19 +232,31 @@ def _fallback_journal(payload: dict[str, Any], settings) -> str:
             if (finance.get(key) or {}).get("display")
         ]
         if quotes:
-            lines.append("💵 " + " | ".join(quotes))
+            header("💵 ECONOMIA")
+            lines.extend(f"• {quote}" for quote in quotes)
 
-    for key, emoji, title, field in (
-        ("tech_news", "💻", "Tecnologia", "items"),
-        ("world_news", "🌍", "Mundo", "items"),
-        ("pop_culture", "🎬", "Cultura Pop", "items"),
+    investments = payload.get("investments") or {}
+    indicators = (investments.get("indicators") or {}) if not investments.get("_error") else {}
+    if indicators:
+        header("📈 IDEIAS DE INVESTIMENTO")
+        lines.extend(
+            f"• {entry.get('label')}: {entry.get('display')}"
+            for entry in indicators.values()
+            if entry.get("display")
+        )
+        if investments.get("disclaimer"):
+            lines.extend(["", investments["disclaimer"]])
+
+    for key, title, field in (
+        ("tech_news", "💻 TECNOLOGIA", "items"),
+        ("world_news", "🌍 MUNDO", "items"),
+        ("pop_culture", "🎬 CULTURA POP", "items"),
     ):
         section = payload.get(key) or {}
         items = section.get(field) or []
         if not items:
             continue
-        lines.append("")
-        lines.append(f"{emoji} {title}")
+        header(title)
         lines.extend(f"• {item.get('title', '')}" for item in items[:4])
 
     return "\n".join(lines)

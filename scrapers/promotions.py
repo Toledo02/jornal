@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from itertools import zip_longest
 from pathlib import Path
@@ -26,6 +27,30 @@ from core.utils import BROWSER_HEADERS, ScraperResult, http_get_text
 logger = logging.getLogger(__name__)
 
 TELEGRAM_PREVIEW_URL = "https://t.me/s/{channel}"
+
+# "Cupom: BLACK20", "código de desconto ABC123". O código costuma vir em caixa alta; a palavra
+# que o anuncia, não. O grupo é capturado com IGNORECASE e validado depois, porque flag por
+# grupo — `(?i:...)` — só existe a partir do Python 3.11.
+_COUPON_RE = re.compile(
+    r"(?:cupom|cupons|c[oó]digo)s?\s*(?:de\s+desconto\s*)?[:\-–]?\s*([\w][\w.\-]{2,23})",
+    re.IGNORECASE,
+)
+
+# Palavras que caem no grupo quando a mensagem não traz código nenhum ("cupom de desconto na
+# página", "cupom disponível no grupo").
+_COUPON_STOPWORDS = {"DE", "DO", "DA", "NO", "NA", "EM", "DESCONTO", "PROMOCIONAL", "EXCLUSIVO"}
+
+
+def _coupon(text: str) -> str | None:
+    """Código de desconto citado na mensagem, quando ele aparece na prévia."""
+    for match in _COUPON_RE.finditer(text):
+        code = match.group(1).strip(".-")
+        if len(code) < 3 or code.upper() in _COUPON_STOPWORDS:
+            continue
+        # Código é caixa alta ou tem dígito; texto corrido em minúsculas não é código.
+        if code == code.upper() or any(char.isdigit() for char in code):
+            return code.upper()
+    return None
 
 
 # --------------------------------------------------------------------------- canais
@@ -69,12 +94,21 @@ def _parse_channel(html: str, channel: str, cutoff: datetime, noise: list[str]) 
             continue
 
         post = node.get("data-post")
+        permalink = f"https://t.me/{post}" if post else None
+        store_url = _external_link(text_el)
+
         messages.append(
             {
                 "channel": channel,
                 "text": text[:400],
-                "url": _external_link(text_el),
-                "permalink": f"https://t.me/{post}" if post else None,
+                # O link publicado é o da mensagem no canal, não o da loja: boa parte das ofertas
+                # só funciona com o cupom, e o cupom está no post — mandar direto para a loja faz
+                # a pessoa pagar o preço cheio. A URL da loja fica no payload como referência.
+                "link": permalink or store_url,
+                "link_type": "canal" if permalink else "loja",
+                "store_url": store_url,
+                "permalink": permalink,
+                "coupon": _coupon(text),
                 "published": published.isoformat() if published else None,
             }
         )
@@ -114,8 +148,12 @@ async def _fetch_channels(settings, promo_cfg: dict[str, Any]) -> tuple[list[dic
 
     # Round-robin entre canais, mesma razão dos feeds RSS: concatenar e truncar faria o
     # primeiro canal ocupar todos os slots.
+    max_per_coupon = int(promo_cfg.get("max_per_coupon", 2))
+
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
+    by_coupon: Counter[str] = Counter()
+
     for row in zip_longest(*per_channel_items):
         for item in row:
             if item is None:
@@ -123,6 +161,13 @@ async def _fetch_channels(settings, promo_cfg: dict[str, Any]) -> tuple[list[dic
             key = re.sub(r"[^\w]", "", item["text"].lower())[:60]
             if key in seen:
                 continue
+            # Uma campanha só (o mesmo cupom em cinco produtos) tomava a seção inteira: num
+            # jornal real, 3 dos 4 achados eram o mesmo "OFERTA8DO8" do Mercado Livre.
+            coupon = item.get("coupon")
+            if coupon and by_coupon[coupon] >= max_per_coupon:
+                continue
+            if coupon:
+                by_coupon[coupon] += 1
             seen.add(key)
             items.append(item)
             if len(items) >= total:

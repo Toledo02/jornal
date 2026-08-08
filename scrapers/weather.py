@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from core.utils import ScraperResult, format_number_pt_br, http_get_json
+from core.utils import ScraperResult, format_number_pt_br, http_get_json, now_local
 
 logger = logging.getLogger(__name__)
 
@@ -60,25 +60,117 @@ def _uv_label(index: float | None) -> str | None:
     return "extremo"
 
 
-def _rain_window(hours: list[int | None], probabilities: list[int | None], threshold: int) -> str | None:
-    """Primeiro intervalo contínuo do dia com chance de chuva acima do limiar.
+def _rain_summary(
+    probability: int | None,
+    volume: float | None,
+    window: str | None,
+    all_day: bool = False,
+) -> str | None:
+    """Uma linha só com tudo que importa sobre chuva, já montada em Python.
 
-    "Vai chover entre 16h e 19h" muda o dia de quem lê às 6h; "60% de chance hoje" não.
+    A seção é lida por tópico, então cada tópico precisa chegar pronto: pedir ao modelo que
+    junte probabilidade, volume e janela é pedir que ele reformate números.
     """
+    if probability is None and volume is None and window is None:
+        return None
+
+    parts: list[str] = []
+    if probability is not None:
+        parts.append(f"{probability}% de chance")
+    if volume:
+        parts.append(f"{format_number_pt_br(float(volume), 1)} mm previstos")
+    if all_day:
+        parts.append("chuva praticamente o dia todo")
+    if window:
+        # "mais forte" quando chove o dia inteiro: aí a janela é o pico, não o começo.
+        parts.append(f"{'mais forte' if all_day else 'mais provável'} entre {window}")
+
+    if not parts:
+        return None
+    if probability == 0 and not window:
+        return "sem chuva prevista"
+    return ", ".join(parts)
+
+
+def _rain_blocks(
+    hours: list[int | None], probabilities: list[int | None], threshold: int, start_hour: int = 0
+) -> list[tuple[int, int, int]]:
+    """Intervalos contínuos acima do limiar, como (início, fim, pico), a partir de `start_hour`.
+
+    Horas já passadas são descartadas: o jornal chega às 5h55 e "chuva provável entre 0h e 1h"
+    descreve a madrugada que a pessoa dormiu.
+    """
+    blocks: list[tuple[int, int, int]] = []
     start: int | None = None
-    end: int | None = None
+    end = peak = 0
 
     for hour, probability in zip(hours, probabilities):
+        if hour is None or hour < start_hour:
+            continue
         if probability is not None and probability >= threshold:
             if start is None:
-                start = hour
-            end = hour
+                start, peak = hour, probability
+            end, peak = hour, max(peak, probability)
         elif start is not None:
-            break
+            blocks.append((start, end, peak))
+            start = None
 
-    if start is None:
+    if start is not None:
+        blocks.append((start, end, peak))
+    return blocks
+
+
+def _rain_window(
+    hours: list[int | None],
+    probabilities: list[int | None],
+    threshold: int,
+    start_hour: int = 0,
+    max_window_hours: int = 6,
+    narrow_margin: int = 20,
+) -> str | None:
+    """A janela de chuva que vale avisar — a mais intensa do que resta do dia, não a primeira.
+
+    Dois erros que esta função já cometeu, os dois observados com dados reais de Curitiba
+    (08/08/2026: 47% à 0h, 42% à 1h, depois 83-100% das 13h às 17h):
+
+    * devolvia o **primeiro** bloco acima do limiar e parava no primeiro buraco, então travava no
+      resmungo de 47% da madrugada e não mencionava a chuva de verdade da tarde;
+    * não olhava a hora, então anunciava uma janela que já tinha passado quando o jornal chegou.
+
+    Quando o bloco vencedor é longo demais para servir de aviso ("chuva entre 5h e 23h" não ajuda
+    ninguém), ele é estreitado para o miolo — as horas dentro de `narrow_margin` pontos do pico.
+    """
+    blocks = _rain_blocks(hours, probabilities, threshold, start_hour)
+    if not blocks:
         return None
+
+    # Maior pico primeiro; empatado, o bloco mais longo; ainda empatado, o mais cedo.
+    start, end, peak = max(blocks, key=lambda b: (b[2], b[1] - b[0], -b[0]))
+
+    if end - start + 1 > max_window_hours:
+        core = _rain_blocks(hours, probabilities, max(threshold, peak - narrow_margin), start_hour)
+        if core:
+            start, end, _ = max(core, key=lambda b: (b[2], b[1] - b[0], -b[0]))
+
     return f"{start}h" if start == end else f"{start}h-{end}h"
+
+
+def _rains_most_of_day(
+    hours: list[int | None], probabilities: list[int | None], threshold: int, start_hour: int = 0
+) -> bool:
+    """Verdadeiro quando a maior parte do que resta do dia está acima do limiar.
+
+    Com a janela estreitada para o pico, sem isto se perderia a diferença entre "chove das 13h às
+    17h" e "chove o dia todo, mais forte das 13h às 17h".
+    """
+    remaining = [
+        probability
+        for hour, probability in zip(hours, probabilities)
+        if hour is not None and hour >= start_hour and probability is not None
+    ]
+    if len(remaining) < 6:
+        return False
+    return sum(1 for probability in remaining if probability >= threshold) / len(remaining) >= 0.7
 
 
 async def fetch(settings) -> ScraperResult:
@@ -126,6 +218,17 @@ async def fetch(settings) -> ScraperResult:
         temp_min = daily["temperature_2m_min"][0]
         temp_max = daily["temperature_2m_max"][0]
 
+        rain_probability = (daily.get("precipitation_probability_max") or [None])[0]
+        rain_mm = (daily.get("precipitation_sum") or [None])[0]
+        # A partir da hora atual: o jornal é lido de manhã e não adianta avisar sobre a chuva
+        # que caiu de madrugada.
+        current_hour = now_local().hour
+        rain_window = _rain_window(hours, probabilities, rain_threshold, current_hour)
+        rain_all_day = _rains_most_of_day(hours, probabilities, rain_threshold, current_hour)
+        sunrise = (daily.get("sunrise") or [""])[0][-5:] or None
+        sunset = (daily.get("sunset") or [""])[0][-5:] or None
+        uv_label = _uv_label(uv_max)
+
         data: dict[str, Any] = {
             "city": city,
             "date": daily["time"][0],
@@ -135,16 +238,29 @@ async def fetch(settings) -> ScraperResult:
             "feels_like": _celsius(current.get("apparent_temperature")),
             "wind": None if wind is None else f"{format_number_pt_br(float(wind), 0)} km/h",
             "temp_range": f"{_celsius(temp_min)} a {_celsius(temp_max)}",
+            "temp_min": _celsius(temp_min),
+            "temp_max": _celsius(temp_max),
             # Numéricos crus para o histórico comparativo; o texto acima é para o LLM copiar.
             "temp_min_c": temp_min,
             "temp_max_c": temp_max,
-            "rain_probability_percent": (daily.get("precipitation_probability_max") or [None])[0],
-            "rain_mm": (daily.get("precipitation_sum") or [None])[0],
-            "rain_window": _rain_window(hours, probabilities, rain_threshold),
-            "sunrise": (daily.get("sunrise") or [""])[0][-5:] or None,
-            "sunset": (daily.get("sunset") or [""])[0][-5:] or None,
+            "rain_probability_percent": rain_probability,
+            "rain_mm": rain_mm,
+            "rain_window": rain_window,
+            "rain_all_day": rain_all_day,
+            # Cada tópico da seção já montado: o modelo copia a linha, não recalcula nada.
+            "rain_summary": _rain_summary(rain_probability, rain_mm, rain_window, rain_all_day),
+            "sunrise": sunrise,
+            "sunset": sunset,
+            "sun_summary": (
+                f"nascer {sunrise} · pôr {sunset}" if sunrise and sunset else sunrise or sunset
+            ),
             "uv_index_max": uv_max,
-            "uv_label": _uv_label(uv_max),
+            "uv_label": uv_label,
+            "uv_summary": (
+                None
+                if uv_max is None
+                else f"{uv_label} ({format_number_pt_br(float(uv_max), 1)})"
+            ),
         }
         return ScraperResult(section=section, status="ok", data=data)
 

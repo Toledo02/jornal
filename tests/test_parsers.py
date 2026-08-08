@@ -13,10 +13,11 @@ from core import history
 from core.telegram_sender import _open_tags, _split_message, sanitize_html
 from core.utils import format_date_pt_br, format_number_pt_br, strip_html
 from scrapers.finance import _invert_variation, _variation_suffix
-from scrapers.gaming import _worth_usd
+from scrapers.gaming import _days_until, _ends_in_label, _worth_usd
+from scrapers.investments import _annualize, _real_rate, _talking_points
 from scrapers.news_rss import _interleave, _normalize_title
-from scrapers.promotions import _parse_price, _slugify
-from scrapers.weather import _rain_window, _uv_label
+from scrapers.promotions import _coupon, _parse_price, _slugify
+from scrapers.weather import _rain_summary, _rain_window, _uv_label
 
 
 # --------------------------------------------------------------------------- números
@@ -311,3 +312,183 @@ def test_extract_metrics_le_cotacoes_e_temperaturas():
         "temp_max": 26.3,
         "temp_min": 16.5,
     }
+
+
+# --------------------------------------------------------------------------- clima por tópico
+
+
+def test_rain_summary_junta_probabilidade_volume_e_janela():
+    assert _rain_summary(80, 3.1, "16h-19h") == (
+        "80% de chance, 3,1 mm previstos, mais provável entre 16h-19h"
+    )
+
+
+def test_rain_summary_sem_janela_omite_o_trecho():
+    assert _rain_summary(30, None, None) == "30% de chance"
+
+
+def test_rain_summary_zero_por_cento_diz_que_nao_chove():
+    assert _rain_summary(0, 0, None) == "sem chuva prevista"
+
+
+def test_rain_summary_sem_dado_nenhum():
+    assert _rain_summary(None, None, None) is None
+
+
+# --------------------------------------------------------------------------- prazo dos giveaways
+
+
+def test_days_until_conta_a_partir_de_hoje():
+    amanha = (date.today() + timedelta(days=1)).isoformat()
+    assert _days_until(f"{amanha} 23:59:00") == 1
+
+
+def test_days_until_aceita_data_sem_hora():
+    assert _days_until(date.today().isoformat()) == 0
+
+
+@pytest.mark.parametrize("valor", [None, "N/A", "sem data"])
+def test_days_until_sem_data(valor):
+    assert _days_until(valor) is None
+
+
+@pytest.mark.parametrize(
+    "dias,esperado",
+    [(0, "último dia"), (-1, "último dia"), (1, "termina amanhã"), (5, "termina em 5 dias")],
+)
+def test_ends_in_label(dias, esperado):
+    assert _ends_in_label(dias) == esperado
+
+
+# --------------------------------------------------------------------------- investimentos
+
+
+def test_real_rate_usa_fisher_e_nao_subtracao():
+    # 13,90 - 4,64 daria 9,26; o correto é 8,85.
+    assert round(_real_rate(13.90, 4.64), 2) == 8.85
+
+
+def test_annualize_converte_taxa_mensal():
+    assert round(_annualize(0.6717), 2) == 8.36
+
+
+def test_talking_points_nao_repete_a_comparacao_com_o_cdi():
+    indicadores = {
+        "cdi": {"label": "CDI", "value": 13.9, "display": "13,90% a.a."},
+        "poupanca": {"label": "Poupança", "value": 0.6717, "display": "0,67% a.m."},
+    }
+    derivados = {
+        "poupanca_anual": {
+            "value": 8.36,
+            "display": "8,36% a.a. equivalentes — cerca de 60% do CDI",
+            "percent_of_cdi": 60.0,
+        }
+    }
+    frase = next(p for p in _talking_points(indicadores, derivados) if "poupança" in p.lower())
+    # Reaproveitar o `display` (que já embute a comparação) repetia "60% do CDI" na mesma frase.
+    # A menção a "100% do CDI" é outra coisa: é o CDB com que a poupança está sendo comparada.
+    assert frase.count("60% do CDI") == 1
+    assert "8,36% a.a." in frase
+
+
+def test_talking_points_sem_indicador_nao_inventa_frase():
+    assert _talking_points({}, {}) == []
+
+
+# --------------------------------------------------------------------------- cupons
+
+
+@pytest.mark.parametrize(
+    "texto,esperado",
+    [
+        ("Monitor Gamer ✅ R$ 899 🏷 Cupom: OFERTA8DO8 🛒", "OFERTA8DO8"),
+        ("Usem o cupom INFLU350 no carrinho", "INFLU350"),
+        ("código de desconto: BLACK20", "BLACK20"),
+        ("Cupom disponível na página do produto", None),
+        ("Smart TV por R$ 1.997,00 parcelado", None),
+    ],
+)
+def test_coupon(texto, esperado):
+    assert _coupon(texto) == esperado
+
+
+# --------------------------------------------------------------------------- repetição de jogos
+
+
+def _payload_gaming(free_games=None, deals=None, limit=2) -> dict:
+    return {
+        "gaming": {
+            "free_games": list(free_games or []),
+            "deals": list(deals or []),
+            "deals_display_limit": limit,
+        }
+    }
+
+
+def _historico_com_destaques(titulos: dict[str, list[str]], dias_atras: int = 1) -> dict:
+    dia = date.today() - timedelta(days=dias_atras)
+    destaques = {
+        chave: [history._highlight_key(t) for t in valores] for chave, valores in titulos.items()
+    }
+    return history.record({}, dia, "jornal", {}, destaques)
+
+
+def test_extract_highlights_normaliza_o_titulo():
+    payload = _payload_gaming(deals=[{"title": "Sid Meier's Civilization VI"}])
+    assert history.extract_highlights(payload)["deals"] == ["sidmeierscivilizationvi"]
+
+
+def test_repeat_policy_descarta_oferta_paga_ja_publicada():
+    payload = _payload_gaming(
+        deals=[{"title": "The Witcher 3"}, {"title": "Disco Elysium"}, {"title": "MORDHAU"}]
+    )
+    history.apply_repeat_policy(payload, _historico_com_destaques({"deals": ["The Witcher 3"]}))
+    assert [d["title"] for d in payload["gaming"]["deals"]] == ["Disco Elysium", "MORDHAU"]
+
+
+def test_repeat_policy_respeita_o_limite_de_exibicao():
+    payload = _payload_gaming(deals=[{"title": f"Jogo {i}"} for i in range(10)], limit=3)
+    history.apply_repeat_policy(payload, {})
+    assert len(payload["gaming"]["deals"]) == 3
+    # A chave auxiliar não deve sobrar no payload que vai ao modelo.
+    assert "deals_display_limit" not in payload["gaming"]
+
+
+def test_repeat_policy_mantem_giveaway_repetido_que_esta_acabando():
+    payload = _payload_gaming(
+        free_games=[
+            {"title": "Breathedge", "days_left": 1},
+            {"title": "Moonlighter", "days_left": 6},
+            {"title": "Novo Jogo", "days_left": 4},
+            {"title": "Outro Novo", "days_left": 4},
+        ]
+    )
+    historico = _historico_com_destaques({"free_games": ["Breathedge", "Moonlighter"]})
+    history.apply_repeat_policy(payload, historico)
+
+    titulos = [g["title"] for g in payload["gaming"]["free_games"]]
+    # Breathedge fica por estar acabando; Moonlighter sai porque já saiu e ainda tem prazo.
+    assert titulos == ["Breathedge", "Novo Jogo", "Outro Novo"]
+
+
+def test_repeat_policy_completa_com_repetidos_quando_falta_novidade():
+    payload = _payload_gaming(
+        free_games=[{"title": "Breathedge", "days_left": 6}, {"title": "Moonlighter", "days_left": 6}]
+    )
+    historico = _historico_com_destaques({"free_games": ["Breathedge", "Moonlighter"]})
+    history.apply_repeat_policy(payload, historico)
+    # Nenhum é novo, mas seção vazia é pior: mantém o mínimo.
+    assert len(payload["gaming"]["free_games"]) == 2
+
+
+def test_repeat_policy_marca_o_que_e_novo():
+    payload = _payload_gaming(free_games=[{"title": "Novo Jogo", "days_left": 3}])
+    history.apply_repeat_policy(payload, _historico_com_destaques({"free_games": ["Breathedge"]}))
+    assert payload["gaming"]["free_games"][0]["is_new"] is True
+    assert payload["gaming"]["free_games"][0]["days_shown"] == 0
+
+
+def test_repeat_policy_ignora_payload_sem_gaming():
+    payload = {"weather": {"city": "Curitiba"}}
+    history.apply_repeat_policy(payload, {})
+    assert payload == {"weather": {"city": "Curitiba"}}

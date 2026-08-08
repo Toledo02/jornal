@@ -20,6 +20,7 @@ from scrapers import (
     football,
     gaming,
     github_trending,
+    investments,
     news_rss,
     promotions,
     weather,
@@ -30,6 +31,7 @@ ScraperFn = Callable[..., Awaitable[ScraperResult]]
 SCRAPERS: list[tuple[str, ScraperFn]] = [
     ("weather", weather.fetch),
     ("finance", finance.fetch),
+    ("investments", investments.fetch),
     ("tech_news", lambda s: news_rss.fetch(s, category="tech")),
     ("world_news", lambda s: news_rss.fetch(s, category="world")),
     ("pop_culture", lambda s: news_rss.fetch(s, category="pop_culture")),
@@ -185,6 +187,14 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
 
     history = _load_history(settings, history_file, logger)
     history_store.enrich_payload(payload, history)
+    history_store.apply_repeat_policy(
+        payload,
+        history,
+        window_days=int(
+            history_cfg.get("repeat_window_days", history_store.DEFAULT_REPEAT_WINDOW_DAYS)
+        ),
+    )
+    history_store.filter_published_items(payload, history, days=journals_in_prompt)
 
     previous = history_store.recent_journals(history, journals_in_prompt)
     logger.info("Histórico: %s dias guardados, %s jornais no prompt", len(history), len(previous))
@@ -203,7 +213,11 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
         # "já publicado" e suprimir as notícias dele amanhã.
         try:
             updated = history_store.record(
-                history, now_local().date(), journal_text, history_store.extract_metrics(payload)
+                history,
+                now_local().date(),
+                journal_text,
+                history_store.extract_metrics(payload),
+                history_store.extract_highlights(payload),
             )
             history_store.save(history_file, updated, retention_days)
             logger.info("Histórico atualizado (%s dias)", len(updated))
