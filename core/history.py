@@ -35,6 +35,10 @@ DEFAULT_JOURNALS_IN_PROMPT = 3
 # Janela padrão para considerar um destaque "já mostrado".
 DEFAULT_REPEAT_WINDOW_DAYS = 7
 
+# Janela do rodízio de ações/ETFs em IDEIAS DE INVESTIMENTO. Pool menor que o de jogos, então a
+# janela também é menor.
+DEFAULT_STOCK_REPEAT_WINDOW_DAYS = 3
+
 
 def load(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -258,7 +262,7 @@ def _highlight_key(title: str) -> str:
 
 
 def extract_highlights(payload: dict[str, Any]) -> dict[str, list[str]]:
-    """Títulos publicados hoje, para não repetir amanhã."""
+    """Títulos e tickers publicados hoje, para não repetir nos próximos dias."""
     gaming = payload.get("gaming") or {}
     highlights: dict[str, list[str]] = {}
     for key in ("free_games", "deals"):
@@ -269,6 +273,16 @@ def extract_highlights(payload: dict[str, Any]) -> dict[str, list[str]]:
         ]
         if titles:
             highlights[key] = titles
+
+    stocks = (payload.get("investments") or {}).get("stocks") or {}
+    tickers = [
+        candidate["ticker"]
+        for candidate in (stocks.get("candidates") or [])
+        if isinstance(candidate, dict) and candidate.get("ticker")
+    ]
+    if tickers:
+        highlights["stocks"] = tickers
+
     return highlights
 
 
@@ -342,6 +356,45 @@ def apply_repeat_policy(
         if len(kept) != len(free_games):
             logger.info("%s giveaways repetidos omitidos", len(free_games) - len(kept))
         gaming["free_games"] = kept
+
+
+def apply_stock_rotation(
+    payload: dict[str, Any],
+    history: dict[str, Any],
+    window_days: int = DEFAULT_STOCK_REPEAT_WINDOW_DAYS,
+) -> None:
+    """Troca as ações/ETFs de IDEIAS DE INVESTIMENTO para não repetir o mesmo trio todo dia.
+
+    Mesmo princípio do rodízio de ofertas pagas em `apply_repeat_policy`: o scraper devolve um
+    pool maior que o exibido, aqui o que já saiu recentemente é removido e o próximo do pool sobe.
+    Diferente do título de jogo/oferta, o ticker já é uma chave canônica — não precisa de
+    `_highlight_key` para normalizar grafia.
+    """
+    stocks = (payload.get("investments") or {}).get("stocks")
+    if not isinstance(stocks, dict):
+        return
+
+    candidates = stocks.get("candidates") or []
+    limit = int(stocks.pop("display_limit", len(candidates)) or len(candidates))
+    if not candidates:
+        return
+
+    seen = _highlight_counts(history, "stocks", window_days)
+    fresh = [c for c in candidates if seen.get(c.get("ticker"), 0) == 0]
+    repeats = sorted(
+        (c for c in candidates if c not in fresh),
+        key=lambda c: seen.get(c.get("ticker"), 0),
+    )
+
+    chosen = fresh[:limit]
+    if len(chosen) < limit:
+        chosen.extend(repeats[: limit - len(chosen)])
+
+    if len(chosen) != len(candidates):
+        logger.info(
+            "%s ações/ETFs já destacadas nos últimos %s dias", len(candidates) - len(fresh), window_days
+        )
+    stocks["candidates"] = chosen
 
 
 def record(

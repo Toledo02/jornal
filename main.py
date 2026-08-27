@@ -194,6 +194,15 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
             history_cfg.get("repeat_window_days", history_store.DEFAULT_REPEAT_WINDOW_DAYS)
         ),
     )
+    history_store.apply_stock_rotation(
+        payload,
+        history,
+        window_days=int(
+            history_cfg.get(
+                "stock_repeat_window_days", history_store.DEFAULT_STOCK_REPEAT_WINDOW_DAYS
+            )
+        ),
+    )
     history_store.filter_published_items(payload, history, days=journals_in_prompt)
 
     previous = history_store.recent_journals(history, journals_in_prompt)

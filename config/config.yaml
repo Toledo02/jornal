@@ -38,6 +38,20 @@ investments:
       unit: "a.m."
   profiles: ["conservador", "moderado", "arrojado"]
   disclaimer: "Conteúdo informativo, não é recomendação de investimento."
+  # Pool de ações/ETFs elegíveis a aparecer em "Destaques da bolsa" — maior que o exibido por
+  # dia para dar folga ao rodízio (mesmo princípio do cheapshark.candidate_pool/max_deals).
+  stock_pool:
+    - { ticker: "PETR4", yahoo_symbol: "PETR4.SA", name: "Petrobras", class: "ação" }
+    - { ticker: "VALE3", yahoo_symbol: "VALE3.SA", name: "Vale", class: "ação" }
+    - { ticker: "ITUB4", yahoo_symbol: "ITUB4.SA", name: "Itaú Unibanco", class: "ação" }
+    - { ticker: "BBDC4", yahoo_symbol: "BBDC4.SA", name: "Bradesco", class: "ação" }
+    - { ticker: "WEGE3", yahoo_symbol: "WEGE3.SA", name: "WEG", class: "ação" }
+    - { ticker: "ABEV3", yahoo_symbol: "ABEV3.SA", name: "Ambev", class: "ação" }
+    - { ticker: "B3SA3", yahoo_symbol: "B3SA3.SA", name: "B3", class: "ação" }
+    - { ticker: "BOVA11", yahoo_symbol: "BOVA11.SA", name: "iShares Ibovespa", class: "ETF" }
+    - { ticker: "IVVB11", yahoo_symbol: "IVVB11.SA", name: "iShares S&P 500", class: "ETF" }
+    - { ticker: "SMAL11", yahoo_symbol: "SMAL11.SA", name: "iShares Small Cap", class: "ETF" }
+  stocks_shown: 3
 
 rss_feeds:
   tech:
@@ -191,6 +205,9 @@ history:
   # Por quantos dias um jogo ou oferta já publicado continua bloqueado. A regra do prompt não
   # dá conta disso sozinha: o modelo não compara listas entre dias, só texto.
   repeat_window_days: 7
+  # Por quantos dias uma ação/ETF já destacada em IDEIAS DE INVESTIMENTO continua bloqueada.
+  # Pool menor que o de jogos, então a janela também é menor.
+  stock_repeat_window_days: 3
 
 orchestrator:
   scraper_timeout_seconds: 30

@@ -14,7 +14,7 @@ from core.telegram_sender import _open_tags, _split_message, sanitize_html
 from core.utils import format_date_pt_br, format_number_pt_br, strip_html
 from scrapers.finance import _invert_variation, _variation_suffix
 from scrapers.gaming import _days_until, _ends_in_label, _worth_usd
-from scrapers.investments import _annualize, _real_rate, _talking_points
+from scrapers.investments import _annualize, _build_stock_candidate, _real_rate, _talking_points
 from scrapers.news_rss import _interleave, _normalize_title
 from scrapers.promotions import _coupon, _parse_price, _slugify
 from scrapers.weather import _rain_summary, _rain_window, _uv_label
@@ -395,6 +395,26 @@ def test_talking_points_sem_indicador_nao_inventa_frase():
     assert _talking_points({}, {}) == []
 
 
+_PETR4 = {"ticker": "PETR4", "name": "Petrobras", "class": "ação"}
+
+
+def test_build_stock_candidate_calcula_variacao_e_faixa():
+    candidato = _build_stock_candidate(_PETR4, [30.10, 42.80, 38.00, 38.50])
+    assert candidato["ticker"] == "PETR4"
+    assert candidato["display"] == "R$ 38,50 (+1,32%)"
+    assert candidato["range_display"] == "mín. R$ 30,10 / máx. R$ 42,80 em 12 meses"
+
+
+def test_build_stock_candidate_sinal_negativo():
+    candidato = _build_stock_candidate(_PETR4, [40.00, 38.00])
+    assert candidato["display"] == "R$ 38,00 (-5,00%)"
+
+
+def test_build_stock_candidate_sem_closes_suficientes_retorna_none():
+    assert _build_stock_candidate(_PETR4, []) is None
+    assert _build_stock_candidate(_PETR4, [38.50]) is None
+
+
 # --------------------------------------------------------------------------- cupons
 
 
@@ -492,3 +512,54 @@ def test_repeat_policy_ignora_payload_sem_gaming():
     payload = {"weather": {"city": "Curitiba"}}
     history.apply_repeat_policy(payload, {})
     assert payload == {"weather": {"city": "Curitiba"}}
+
+
+# --------------------------------------------------------------------------- rodízio de ações
+
+
+def _payload_stocks(tickers: list[str], limit: int = 3) -> dict:
+    return {
+        "investments": {
+            "stocks": {
+                "candidates": [{"ticker": t, "display": t} for t in tickers],
+                "display_limit": limit,
+            }
+        }
+    }
+
+
+def _historico_com_stocks(tickers: list[str], dias_atras: int = 1) -> dict:
+    dia = date.today() - timedelta(days=dias_atras)
+    return history.record({}, dia, "jornal", {}, {"stocks": tickers})
+
+
+def test_extract_highlights_inclui_tickers_de_acoes():
+    payload = _payload_stocks(["PETR4", "VALE3"])
+    assert history.extract_highlights(payload)["stocks"] == ["PETR4", "VALE3"]
+
+
+def test_stock_rotation_prefere_tickers_nao_vistos():
+    payload = _payload_stocks(["PETR4", "VALE3", "ITUB4", "WEGE3"], limit=2)
+    history.apply_stock_rotation(payload, _historico_com_stocks(["PETR4", "VALE3"]))
+    tickers = [c["ticker"] for c in payload["investments"]["stocks"]["candidates"]]
+    assert tickers == ["ITUB4", "WEGE3"]
+
+
+def test_stock_rotation_completa_com_repetidos_quando_falta_novidade():
+    payload = _payload_stocks(["PETR4", "VALE3"], limit=2)
+    history.apply_stock_rotation(payload, _historico_com_stocks(["PETR4", "VALE3"]))
+    tickers = [c["ticker"] for c in payload["investments"]["stocks"]["candidates"]]
+    assert tickers == ["PETR4", "VALE3"]
+
+
+def test_stock_rotation_remove_display_limit_do_payload():
+    payload = _payload_stocks(["PETR4", "VALE3", "ITUB4"], limit=1)
+    history.apply_stock_rotation(payload, {})
+    assert "display_limit" not in payload["investments"]["stocks"]
+    assert len(payload["investments"]["stocks"]["candidates"]) == 1
+
+
+def test_stock_rotation_ignora_payload_sem_stocks():
+    payload = {"investments": {"indicators": {}}}
+    history.apply_stock_rotation(payload, {})
+    assert payload == {"investments": {"indicators": {}}}

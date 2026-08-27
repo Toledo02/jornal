@@ -65,26 +65,41 @@ Rules:
      If "vs_ontem" is present, append it to the "Máxima e mínima" bullet.
    - ECONOMIA: present USD, EUR, ARS, BTC and IBOVESPA as bullet points, never as running text.
      Each asset carries a preformatted "display" field — copy that string EXACTLY, including the
-     percentage in parentheses. Never reformat a number, never convert currency, and never compute
-     a percentage yourself. If an asset has no "display" field, omit that bullet. Close with at
-     most one short line about the market headlines, when there are any.
+     percentage in parentheses, but the field is only the value: prefix EVERY bullet with a bold
+     label naming the asset, e.g. "• <b>Dólar:</b> R$ 5,12 (+0,10%)". Use these labels in this
+     order: <b>Dólar:</b> for usd_brl, <b>Euro:</b> for eur_brl, <b>Peso argentino:</b> for
+     ars_brl, <b>Bitcoin:</b> for btc_brl, <b>Ibovespa:</b> for ibovespa. Never reformat a number,
+     never convert currency, and never compute a percentage yourself. If an asset has no "display"
+     field, omit that bullet. Close with at most one short line about the market headlines, when
+     there are any.
    - IDEIAS DE INVESTIMENTO: built from the "investments" payload, which is data about interest
-     rates — not a portfolio.
+     rates plus, when present, a rotating set of real market tickers — not a portfolio and not
+     personalized advice.
        • Open with one bullet listing the reference rates, copying the "display" of each indicator
          in "indicators" (e.g. "• <b>Referências:</b> Selic 14,00% a.a. · CDI 13,90% a.a. ·
          IPCA 4,64% em 12 meses").
+       • If "stocks.candidates" is present and non-empty, add ONE bullet per entry, labelled in
+         bold with its ticker and name (e.g. "• <b>PETR4 (Petrobras):</b> R$ 38,50 (+1,20%) —
+         faixa de R$ 30,10 a R$ 42,80 em 12 meses."). Copy each entry's "display" and
+         "range_display" EXACTLY as given. You may name ONLY the tickers present in
+         "stocks.candidates" — never any other stock, fund, cryptocurrency or issuer. This is
+         factual reporting of price and range, not a recommendation: never tell the reader to buy
+         or sell that ticker, and never predict where its price is going.
        • Then ONE bullet per profile in "profiles", labelled in bold ("• <b>Conservador:</b> ...").
          Each is at most two sentences describing what class of asset makes sense at these rates
          and why, in plain language.
-       • Every numeric claim MUST come from "talking_points", "derived" or "indicators" — copy the
-         numbers as formatted there. NEVER compute a yield, a projection or a percentage yourself,
-         and never state how much money something would return.
-       • Speak about CLASSES of asset only (Tesouro Selic, CDB de liquidez diária, Tesouro IPCA+,
-         fundos de índice amplos, reserva em dólar). NEVER name a specific stock, ticker,
-         cryptocurrency to buy, broker, fund or issuer, and never tell the reader to buy or sell.
-         Use "faz sentido considerar", not "compre".
+       • Every numeric claim MUST come from "talking_points", "derived", "indicators" or
+         "stocks.candidates" — copy the numbers as formatted there. NEVER compute a yield, a
+         projection or a percentage yourself, and never state how much money something would
+         return.
+       • Outside of the tickers listed in "stocks.candidates", speak about CLASSES of asset only
+         (Tesouro Selic, CDB de liquidez diária, Tesouro IPCA+, fundos de índice amplos, reserva em
+         dólar). NEVER invent a specific stock, ticker, cryptocurrency, broker, fund or issuer that
+         is not in the payload, and never tell the reader to buy or sell. Use "faz sentido
+         considerar", not "compre".
        • The "arrojado" bullet may reference the IBOVESPA or Bitcoin variation from the "finance"
-         payload as context, but must not predict where any price is going.
+         payload, or the movement of a listed ticker, as context, but must not predict where any
+         price is going.
        • Close the section with the "disclaimer" string in <i>italics</i>, on its own line.
    - TECNOLOGIA & DEV: the 3 most relevant tech news, followed by at most 3 GitHub trending
      repositories.

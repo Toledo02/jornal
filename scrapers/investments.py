@@ -109,6 +109,65 @@ def _derive(indicators: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return derived
 
 
+def _build_stock_candidate(entry: dict[str, Any], closes: list[float]) -> dict[str, Any] | None:
+    """Monta o candidato de ação/ETF pronto para o prompt, a partir dos fechamentos de ~1 ano.
+
+    Preço, variação do dia e faixa de 12 meses são calculados aqui, em Python — mesmo princípio
+    de `_decorate` em finance.py: o modelo só copia string pronta, nunca calcula ele mesmo.
+    """
+    if len(closes) < 2:
+        return None
+
+    current, previous = closes[-1], closes[-2]
+    try:
+        pct = (current - previous) / previous * 100
+    except ZeroDivisionError:
+        return None
+    sign = "+" if pct > 0 else "-" if pct < 0 else ""
+    low, high = min(closes), max(closes)
+
+    return {
+        "ticker": entry["ticker"],
+        "name": entry.get("name", entry["ticker"]),
+        "class": entry.get("class", "ação"),
+        "display": (
+            f"R$ {format_number_pt_br(current, 2)} "
+            f"({sign}{format_number_pt_br(abs(pct), 2)}%)"
+        ),
+        "range_display": (
+            f"mín. R$ {format_number_pt_br(low, 2)} / máx. R$ {format_number_pt_br(high, 2)} "
+            "em 12 meses"
+        ),
+    }
+
+
+def _fetch_stock_pool_sync(pool: list[dict[str, Any]]) -> dict[str, list[float]]:
+    """Um único download em lote para o pool inteiro — não N chamadas sequenciais.
+
+    yfinance já é a fonte mais lenta da cadeia de cotações (finance.py); buscar ação por ação
+    multiplicaria esse custo pelo tamanho do pool.
+    """
+    import yfinance as yf
+
+    symbols = [entry["yahoo_symbol"] for entry in pool]
+    history = yf.download(
+        symbols, period="1y", group_by="ticker", auto_adjust=True, progress=False, threads=True
+    )
+
+    closes: dict[str, list[float]] = {}
+    for symbol in symbols:
+        try:
+            series = history[symbol]["Close"] if len(symbols) > 1 else history["Close"]
+        except (KeyError, TypeError):
+            continue
+        closes[symbol] = [float(value) for value in series.dropna().tolist()]
+    return closes
+
+
+async def _fetch_stocks(pool: list[dict[str, Any]]) -> dict[str, list[float]]:
+    return await asyncio.to_thread(_fetch_stock_pool_sync, pool)
+
+
 def _talking_points(indicators: dict[str, dict[str, Any]], derived: dict[str, Any]) -> list[str]:
     """Afirmações prontas, com os números já formatados.
 
@@ -218,9 +277,38 @@ async def fetch(settings) -> ScraperResult:
         len(data["talking_points"]),
     )
 
-    # Uma série faltando não degrada a seção — as outras seguram os pontos de apoio, e alertar
-    # sobre isso todo dia treinaria você a ignorar os alertas (ver "Alerta é sobre resultado").
-    if errors:
-        logger.info("Indicadores ausentes hoje: %s", "; ".join(errors))
+    stock_errors: list[str] = []
+    stock_pool = cfg.get("stock_pool") or []
+    if stock_pool:
+        try:
+            closes = await _fetch_stocks(stock_pool)
+            candidates = [
+                candidate
+                for entry in stock_pool
+                if (candidate := _build_stock_candidate(entry, closes.get(entry["yahoo_symbol"], [])))
+            ]
+            if candidates:
+                data["stocks"] = {
+                    "candidates": candidates,
+                    "display_limit": int(cfg.get("stocks_shown", 3)),
+                }
+                logger.info("investments: %s ações/ETFs no pool de destaques", len(candidates))
+            else:
+                stock_errors.append("stock_pool: nenhuma cotação de ação disponível")
+        except Exception as exc:
+            logger.warning("Stock pool fetch failed: %s", exc)
+            stock_errors.append(f"stock_pool: {exc}")
 
-    return ScraperResult(section=section, status="ok", data=data)
+    # Uma série ou o pool de ações faltando não degrada a seção — as outras seguram os pontos de
+    # apoio, e alertar sobre isso todo dia treinaria você a ignorar os alertas (ver "Alerta é
+    # sobre resultado").
+    all_errors = errors + stock_errors
+    if all_errors:
+        logger.info("Dados ausentes hoje em investments: %s", "; ".join(all_errors))
+
+    return ScraperResult(
+        section=section,
+        status="partial" if stock_errors else "ok",
+        data=data,
+        error="; ".join(stock_errors) if stock_errors else None,
+    )
