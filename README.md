@@ -83,12 +83,6 @@ weather:
   city: "Curitiba"
   lat: -25.4284
   lon: -49.2733
-
-promotions:
-  telegram_channels:    # fonte principal das promoções
-    - "promobit"
-  product_names:
-    - "SSD Kingston NV2 1TB"   # opcional: acompanha o preço via Buscapé
 ```
 
 Os feeds são intercalados em round-robin antes do corte por `max_items_per_category`, então cada
@@ -120,18 +114,19 @@ impede a mesma oferta de voltar todo dia.
 
 ## Módulos de dados
 
-1. **Clima** — Open-Meteo, entregue por tópico (agora, máx/mín, chuva, sol, vento, UV)
+1. **Clima** — Open-Meteo, entregue por tópico (agora, hoje, máx/mín, chuva, sol, vento, UV), com
+   emoji de condição montado em Python
 2. **Economia** — HG Brasil → yfinance → AwesomeAPI, preenchendo ativo a ativo
 3. **Investimentos** — séries do Banco Central (SGS): Selic, CDI, IPCA e poupança, com juro real
-   calculado em Python
+   calculado em Python e uma "ideia do dia" rotacionada pelo histórico
 4. **Tech** — RSS
 5. **Mundo** — RSS (LLM seleciona 3 fatos globais)
-6. **Cultura Pop** — RSS
-7. **GitHub Trending** — scraping
-8. **Gaming** — giveaways da GamerPower + ofertas do CheapShark, filtradas por nota, volume de
+6. **Curitiba & Paraná** — RSS local (Gazeta do Povo PR, Tribuna PR), até 3 fatos
+7. **Cultura Pop** — RSS
+8. **GitHub Trending** — scraping
+9. **Gaming** — giveaways da GamerPower + ofertas do CheapShark, filtradas por nota, volume de
    avaliações e faixa de preço, com rodízio entre dias
-9. **Futebol** — jogos via football-data.org + notícias filtradas do GE
-10. **Promoções** — canais públicos do Telegram + monitoramento opcional de produtos
+10. **Futebol** — jogos via football-data.org + notícias filtradas do GE
 
 ## Deploy na VPS (cron)
 

@@ -12,7 +12,6 @@ env/
 
 # Runtime data
 logs/
-promotions_history.json
 
 # IDE
 .vscode/

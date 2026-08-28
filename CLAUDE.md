@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Visão geral
 
-Agente Python que coleta dados de várias fontes (clima, câmbio, RSS, GitHub, gaming, futebol,
-preços), consolida via Gemini e envia um jornal matinal em pt-BR pelo Telegram. Roda como job único
+Agente Python que coleta dados de várias fontes (clima, câmbio, RSS, GitHub, gaming, futebol),
+consolida via Gemini e envia um jornal matinal em pt-BR pelo Telegram. Roda como job único
 via cron às 05:55, não como serviço.
 
 [PLANO.md](PLANO.md) mantém o backlog de melhorias com o diagnóstico que originou cada item — vale
@@ -62,8 +62,8 @@ VPS. Quando algo falhar com código estranho, **leia o corpo da resposta antes d
 do CheapShark parecia bloqueio de IP e a resposta dizia exatamente qual era o problema.
 
 **Dois User-Agents, de propósito.** `USER_AGENT` (descritivo) para APIs e feeds; `BROWSER_HEADERS`
-para os alvos de scraping de HTML — InfoMoney, GE Globo, Buscapé, canais do Telegram e GitHub Trending.
-As duas famílias de site querem coisas opostas.
+para os alvos de scraping de HTML — GE Globo e GitHub Trending. As duas famílias de site querem
+coisas opostas.
 
 **O `SYSTEM_PROMPT` é a camada de apresentação.** Seções, ordem, emojis, onde links são permitidos e
 formatação vivem no prompt ([core/ai_engine.py](core/ai_engine.py)), não em código. Restrições que
@@ -79,7 +79,10 @@ pelo sanitizador, então pedir `<h2>` ao modelo não falha: só apaga o título.
 
 **Seções lidas por tópico.** Clima e Investimentos são consultados de relance, não lidos como
 parágrafo — cada fato tem seu bullet com rótulo em negrito, e as strings chegam prontas do Python
-(`rain_summary`, `sun_summary`, `uv_summary`, `talking_points`).
+(`rain_summary`, `sun_summary`, `uv_summary`, `today_summary`, `idea_of_the_day`). O emoji de
+condição do clima (`_wmo_emoji`, ☀️/⛅/☁️/🌧️/⛈️…) também é montado em Python e não escolhido pelo
+modelo: o mesmo código WMO tem que dar sempre o mesmo ícone. As setas 🔺/🔻 da máxima vêm coladas
+no `vs_ontem` por `enrich_payload`.
 
 **Números vêm formatados de Python, não do LLM.** Cada ativo em `finance` carrega um campo `display`
 já em pt-BR, e o prompt manda copiá-lo literalmente. Modelo formatando número produz `R$ 0.0034278`,
@@ -88,16 +91,19 @@ e pior: em produção ele chegou a calcular uma variação percentual do IBOVESP
 **A sugestão de investimento não é opinião do modelo.** [investments.py](scrapers/investments.py) lê
 as séries do SGS do Banco Central (Selic, CDI, IPCA, poupança — públicas, sem chave) e calcula em
 Python o juro real (Fisher, não subtração: 13,90 − 4,64 dá 9,26 e o certo é 8,85) e a anualização da
-poupança. O que vai ao prompt é `talking_points`, uma lista de afirmações já redigidas com os números
-formatados; o modelo escolhe e reescreve, mas o prompt proíbe que ele produza número, projeção ou
-rendimento próprio, cite ativo específico, corretora ou emissor, e exige o disclaimer no fim.
+poupança. `_investment_ideas` monta um pool de ~5 afirmações prontas, cada uma com um `id` estável;
+`core/history.apply_investment_idea` escolhe a menos usada nos últimos dias e a move para
+`idea_of_the_day` (removendo o resto do payload). O modelo só reescreve essa frase — o prompt proíbe
+que produza número, projeção ou rendimento próprio, cite ativo específico, corretora ou emissor.
+Não há mais os bullets de perfil (Conservador/Moderado/Arrojado) nem o disclaimer — foram removidos
+na Rodada 5 por serem sempre iguais / a pedido (uso pessoal).
 
 **Duas anti-repetições, e elas não são intercambiáveis.** A escolha entre uma e outra depende de
 o payload ser igual ou não ao que se publica:
 
 * **Jogos** — `apply_repeat_policy` compara *conjuntos de títulos*, porque o payload é trimado para
   exatamente o que vai ao ar (4 ofertas), então registrar o oferecido é registrar o publicado.
-* **Notícias e promoções** — `filter_published_items` compara *nomes próprios contra o texto dos
+* **Notícias** — `filter_published_items` compara *nomes próprios contra o texto dos
   jornais recentes*. Aqui o payload traz 15 candidatos e o modelo publica 3, então guardar os
   títulos oferecidos apagaria 12 matérias que nunca saíram. A comparação é por proporção
   (`min_ratio`), não exata: o feed diz "EUA" onde o jornal escreveu "Estados Unidos", e verbo em
@@ -135,11 +141,18 @@ faltou. `BTC-BRL` saiu do Yahoo e é derivado de `BTC-USD × USD-BRL`.
 [config/config.yaml](config/config.yaml). Nos feeds RSS, os itens são intercalados em round-robin
 antes do corte — concatenar e truncar fazia os primeiros feeds consumirem todos os slots.
 
-**Scrapers de HTML são frágeis por natureza.** Futebol (GE), promoções (Buscapé) e
-GitHub Trending dependem de seletores CSS. Nunca use seletor amplo como `"div, section"`: ele casa
-com a página inteira e injeta o body todo no payload do LLM. Prefira seletores específicos com
-alternativas por vírgula, limite de tamanho por bloco, e uma lista de ruído quando o site mistura
-chamadas de engajamento ao feed.
+**`news_rss.py` é genérico por categoria.** Uma seção nova de notícias (ex.: `local`, a
+`📍 CURITIBA & PARANÁ`) é só: `rss_feeds.<cat>` no config, uma entrada em `SCRAPERS`
+([main.py](main.py)), as regras no `SYSTEM_PROMPT` e a seção em `COVERAGE_SECTIONS`
+([core/history.py](core/history.py)) e no `_fallback_journal`. Não há lógica por categoria dentro
+do scraper além do nome. O `local` usa Gazeta do Povo PR + Tribuna PR; o g1 PR ficou de fora porque
+a Globo bloqueia a validação — testar na VPS antes de somar. A triagem de obituário/horóscopo/
+policial é feita pelo prompt, não por blocklist em Python.
+
+**Scrapers de HTML são frágeis por natureza.** Futebol (GE) e GitHub Trending dependem de seletores
+CSS. Nunca use seletor amplo como `"div, section"`: ele casa com a página inteira e injeta o body
+todo no payload do LLM. Prefira seletores específicos com alternativas por vírgula, limite de
+tamanho por bloco, e uma lista de ruído quando o site mistura chamadas de engajamento ao feed.
 
 **Nomes `OPENAI_*` são herança.** `Settings` usa `llm_*` e o `.env` aceita `LLM_*`, `GEMINI_*` ou
 `OPENAI_*` nessa ordem de precedência ([config/settings.py](config/settings.py)). `_resolve_model`
@@ -159,14 +172,9 @@ bem-sucedido: um jornal que não chegou não pode suprimir as notícias dele ama
 só para o log — a AwesomeAPI responde 429 todo dia e alertar sobre isso treinaria o leitor a
 ignorar os alertas. `_fetch_quotes` só reporta o que ficou faltando no fim.
 
-**Promoções vêm de canais do Telegram**, lidos via `https://t.me/s/<canal>` — a prévia web pública,
-sem bot e sem token ([promotions.py](scrapers/promotions.py)). O monitoramento de produto por
-Buscapé é secundário e opcional; Mercado Livre e Magalu bloqueiam, e o Zoom devolve o mesmo
-catálogo do Buscapé. **O link publicado é o do post no canal (`link`), não o da loja
-(`store_url`)**: boa parte das ofertas só vale com cupom, e o cupom está no post — mandar direto
-para a loja faz você pagar o preço cheio. `_coupon` extrai o código quando ele aparece na prévia, e
-`max_per_coupon` impede que uma campanha só tome a seção (num jornal real, 3 dos 4 achados eram o
-mesmo `OFERTA8DO8`).
+**A seção "Achados & Promoções" saiu do projeto** (Rodada 5 do [PLANO.md](PLANO.md)) para virar um
+projeto à parte — a especificação está em [PROMOCOES_PROJETO.md](PROMOCOES_PROJETO.md). Este repo
+não coleta mais promoção nem cupom.
 
 **Futebol separa jogo de notícia.** A API football-data.org dá adversário, data e placar; o GE dá
 notícia, filtrada por `relevance_keywords` ([config.yaml](config/config.yaml)). Sem o token a seção

@@ -45,6 +45,30 @@ WMO_CODES = {
 }
 
 
+def _wmo_emoji(code: int | None) -> str:
+    """Emoji da condição, montado em Python: deixado a cargo do modelo, ele varia o ícone de um
+    dia para o outro para o mesmo código (hoje 🌦️, amanhã 🌧️ sem a chuva ter mudado)."""
+    if code is None:
+        return ""
+    if code <= 1:
+        return "☀️"
+    if code == 2:
+        return "⛅"
+    if code == 3:
+        return "☁️"
+    if code in (45, 48):
+        return "🌫️"
+    if 51 <= code <= 57:
+        return "🌦️"
+    if 61 <= code <= 67 or 80 <= code <= 82:
+        return "🌧️"
+    if 71 <= code <= 77 or 85 <= code <= 86:
+        return "🌨️"
+    if 95 <= code <= 99:
+        return "⛈️"
+    return ""
+
+
 def _celsius(value: float | None) -> str | None:
     """'18,4°C'. Pelo mesmo motivo das cotações: entregue como float, o modelo escreve
     '18.4°C' com ponto decimal no meio de um texto em português."""
@@ -218,6 +242,11 @@ async def fetch(settings) -> ScraperResult:
         temp_min = daily["temperature_2m_min"][0]
         temp_max = daily["temperature_2m_max"][0]
 
+        daily_code = (daily.get("weather_code") or [None])[0]
+        current_code = current.get("weather_code")
+        condition = WMO_CODES.get(daily_code)
+        condition_now = WMO_CODES.get(current_code)
+
         rain_probability = (daily.get("precipitation_probability_max") or [None])[0]
         rain_mm = (daily.get("precipitation_sum") or [None])[0]
         # A partir da hora atual: o jornal é lido de manhã e não adianta avisar sobre a chuva
@@ -232,8 +261,14 @@ async def fetch(settings) -> ScraperResult:
         data: dict[str, Any] = {
             "city": city,
             "date": daily["time"][0],
-            "condition": WMO_CODES.get((daily.get("weather_code") or [None])[0]),
-            "condition_now": WMO_CODES.get(current.get("weather_code")),
+            "condition": condition,
+            "condition_now": condition_now,
+            # Linha pronta para o bullet "Hoje", com o emoji da condição do dia.
+            "today_summary": (
+                f"{_wmo_emoji(daily_code)} {condition}".strip() if condition else None
+            ),
+            # Emoji para o bullet "Agora" começar por ele.
+            "condition_now_emoji": _wmo_emoji(current_code),
             "temp_now": _celsius(current.get("temperature_2m")),
             "feels_like": _celsius(current.get("apparent_temperature")),
             "wind": None if wind is None else f"{format_number_pt_br(float(wind), 0)} km/h",

@@ -39,6 +39,10 @@ DEFAULT_REPEAT_WINDOW_DAYS = 7
 # janela também é menor.
 DEFAULT_STOCK_REPEAT_WINDOW_DAYS = 3
 
+# Janela do rodízio da "ideia do dia" de investimento. Pool de ~5 frases, então uma janela curta
+# já garante variação sem esgotar as opções.
+DEFAULT_INVESTMENT_IDEA_WINDOW_DAYS = 5
+
 
 def load(path: Path) -> dict[str, Any]:
     if not path.exists():
@@ -149,20 +153,18 @@ def _terms(text: str) -> set[str]:
     return set(_WORD_RE.findall(_fold(text)))
 
 
-# Seções filtradas por cobertura, com o campo da lista e o texto que identifica o item.
-# Promoções entram aqui pelo mesmo motivo das notícias, e não pelo rodízio dos jogos: o payload
-# traz 10 ofertas e o modelo publica 4, então registrar o que foi *oferecido* apagaria 6 que
-# nunca saíram.
+# Seções de notícia filtradas por cobertura, com o campo da lista e o texto que identifica o item.
+# Registrar o que foi *oferecido* não serve aqui: o payload traz 15 candidatos por seção e o
+# modelo publica 3, então guardar os títulos ofertados apagaria 12 matérias que nunca saíram.
 COVERAGE_SECTIONS: dict[str, tuple[str, str, int]] = {
     # seção: (campo da lista, campo do texto, mínimo a preservar)
     "tech_news": ("items", "title", 3),
     "world_news": ("items", "title", 3),
+    "local": ("items", "title", 2),
     "pop_culture": ("items", "title", 3),
-    "promotions": ("offers", "text", 4),
 }
 
-# Só o começo da oferta: o texto do canal tem 400 caracteres de emoji, hashtag e frete, e o
-# produto — que é o que identifica a promoção — vem sempre na frente.
+# Só o começo do texto identifica o item; o resto costuma ser descrição repetível.
 _OFFER_TEXT_LIMIT = 110
 
 
@@ -174,7 +176,7 @@ def filter_published_items(
     min_ratio: float = 0.6,
     sections: dict[str, tuple[str, str, int]] | None = None,
 ) -> None:
-    """Tira das seções de notícia e de promoções o que os jornais recentes já contaram.
+    """Tira das seções de notícia o que os jornais recentes já contaram.
 
     Existe pela mesma razão do rodízio de jogos: a regra 12 do prompt pede ao modelo que compare
     a matéria de hoje com três jornais em prosa, e ele compara mal. A diferença é que aqui não dá
@@ -274,7 +276,8 @@ def extract_highlights(payload: dict[str, Any]) -> dict[str, list[str]]:
         if titles:
             highlights[key] = titles
 
-    stocks = (payload.get("investments") or {}).get("stocks") or {}
+    investments = payload.get("investments") or {}
+    stocks = investments.get("stocks") or {}
     tickers = [
         candidate["ticker"]
         for candidate in (stocks.get("candidates") or [])
@@ -282,6 +285,10 @@ def extract_highlights(payload: dict[str, Any]) -> dict[str, list[str]]:
     ]
     if tickers:
         highlights["stocks"] = tickers
+
+    idea = investments.get("idea_of_the_day") or {}
+    if idea.get("id"):
+        highlights["investment_idea"] = [idea["id"]]
 
     return highlights
 
@@ -397,6 +404,35 @@ def apply_stock_rotation(
     stocks["candidates"] = chosen
 
 
+def apply_investment_idea(
+    payload: dict[str, Any],
+    history: dict[str, Any],
+    window_days: int = DEFAULT_INVESTMENT_IDEA_WINDOW_DAYS,
+) -> None:
+    """Escolhe a "ideia do dia" de IDEIAS DE INVESTIMENTO: a menos usada nos últimos dias.
+
+    Mesma razão do rodízio de jogos e de ações — o modelo compara texto entre dias e compara
+    mal, então a mesma frase voltava toda manhã com outra redação. O `id` da ideia é estável
+    (só os números mudam), então serve de chave. Empate mantém a ordem de `_investment_ideas`
+    (Selic, juro real, poupança, inflação, IPCA+), que já está da mais geral para a mais
+    específica.
+    """
+    investments = payload.get("investments")
+    if not isinstance(investments, dict):
+        return
+
+    ideas = investments.get("ideas") or []
+    if not ideas:
+        return
+
+    seen = _highlight_counts(history, "investment_idea", window_days)
+    chosen = min(enumerate(ideas), key=lambda pair: (seen.get(pair[1].get("id"), 0), pair[0]))[1]
+
+    investments["idea_of_the_day"] = chosen
+    investments.pop("ideas", None)
+    logger.info("Ideia de investimento do dia: %s", chosen.get("id"))
+
+
 def record(
     history: dict[str, Any],
     day: date,
@@ -473,7 +509,8 @@ def enrich_payload(payload: dict[str, Any], history: dict[str, Any]) -> None:
             previous = series[-1][1]
             delta = float(temp_max) - previous
             if abs(delta) >= 3:
+                arrow = "🔺" if delta > 0 else "🔻"
                 direction = "acima" if delta > 0 else "abaixo"
                 weather["vs_ontem"] = (
-                    f"{format_number_pt_br(abs(delta), 1)}°C {direction} da máxima de ontem"
+                    f"{arrow} {format_number_pt_br(abs(delta), 1)}°C {direction} da máxima de ontem"
                 )

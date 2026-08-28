@@ -5,9 +5,10 @@ Por isso a fonte é a série oficial do BCB (SGS, pública e sem chave) e **todo
 acontece aqui, em Python** — juro real, poupança anualizada e a comparação poupança × CDI são
 exatamente o tipo de aritmética que o modelo erra e ninguém confere.
 
-O que vai ao prompt é uma lista de afirmações já prontas (`talking_points`). O modelo escolhe e
-redige; não inventa número, não calcula rendimento e não recomenda ativo específico — a seção é
-informativa e carrega o aviso de que não é recomendação de investimento.
+O que vai ao prompt é uma "ideia do dia" já redigida (`idea_of_the_day`), escolhida em Python
+(`core/history.apply_investment_idea`) entre as afirmações prontas de `_investment_ideas` — a
+menos usada nos últimos dias, para não repetir a mesma toda manhã. O modelo só reescreve a frase;
+não inventa número, não calcula rendimento e não recomenda ativo específico.
 """
 
 from __future__ import annotations
@@ -168,13 +169,17 @@ async def _fetch_stocks(pool: list[dict[str, Any]]) -> dict[str, list[float]]:
     return await asyncio.to_thread(_fetch_stock_pool_sync, pool)
 
 
-def _talking_points(indicators: dict[str, dict[str, Any]], derived: dict[str, Any]) -> list[str]:
-    """Afirmações prontas, com os números já formatados.
+def _investment_ideas(
+    indicators: dict[str, dict[str, Any]], derived: dict[str, Any]
+) -> list[dict[str, str]]:
+    """Afirmações prontas, com os números já formatados, cada uma com um `id` estável.
 
-    O modelo escolhe entre estas e as redige; não deve produzir uma afirmação numérica que não
-    esteja aqui. É o mesmo princípio do campo `display` das cotações, aplicado a frases.
+    O `id` não muda de um dia para o outro (só os números da frase mudam), então serve de chave
+    para o rodízio em `core/history.apply_investment_idea`. É o mesmo princípio do campo `display`
+    das cotações, aplicado a frases: o modelo só reescreve, nunca produz um número que não esteja
+    aqui.
     """
-    points: list[str] = []
+    ideas: list[dict[str, str]] = []
 
     selic = indicators.get("selic")
     cdi = indicators.get("cdi")
@@ -183,17 +188,23 @@ def _talking_points(indicators: dict[str, dict[str, Any]], derived: dict[str, An
     poupanca = derived.get("poupanca_anual")
 
     if selic:
-        points.append(
-            f"A Selic está em {selic['display']}, então pós-fixados atrelados ao CDI "
-            f"(Tesouro Selic, CDB de liquidez diária) acompanham essa taxa."
-        )
+        ideas.append({
+            "id": "selic",
+            "text": (
+                f"A Selic está em {selic['display']}, então pós-fixados atrelados ao CDI "
+                f"(Tesouro Selic, CDB de liquidez diária) acompanham essa taxa."
+            ),
+        })
     if cdi and juro_real and ipca:
-        points.append(
-            f"O CDI roda a {cdi['display']} contra uma inflação de {ipca['display']}: sobram "
-            f"{format_number_pt_br(juro_real['value'], 2)}% ao ano de juro real."
-        )
+        ideas.append({
+            "id": "juro_real",
+            "text": (
+                f"O CDI roda a {cdi['display']} contra uma inflação de {ipca['display']}: sobram "
+                f"{format_number_pt_br(juro_real['value'], 2)}% ao ano de juro real."
+            ),
+        })
     elif cdi:
-        points.append(f"O CDI roda a {cdi['display']}.")
+        ideas.append({"id": "cdi", "text": f"O CDI roda a {cdi['display']}."})
 
     if poupanca:
         # A partir do valor, não do `display`: aquele já traz a comparação com o CDI embutida e
@@ -205,24 +216,33 @@ def _talking_points(indicators: dict[str, dict[str, Any]], derived: dict[str, An
             if share
             else ""
         )
-        points.append(
-            f"A poupança rende o equivalente a "
-            f"{format_number_pt_br(poupanca['value'], 2)}% a.a.{comparison}."
-        )
+        ideas.append({
+            "id": "poupanca",
+            "text": (
+                f"A poupança rende o equivalente a "
+                f"{format_number_pt_br(poupanca['value'], 2)}% a.a.{comparison}."
+            ),
+        })
 
     if ipca:
-        points.append(
-            f"Qualquer aplicação que renda menos que a inflação ({ipca['display']}) está "
-            "perdendo poder de compra."
-        )
+        ideas.append({
+            "id": "inflacao",
+            "text": (
+                f"Qualquer aplicação que renda menos que a inflação ({ipca['display']}) está "
+                "perdendo poder de compra."
+            ),
+        })
 
     if juro_real and juro_real["value"] >= 5:
-        points.append(
-            "Com juro real alto, títulos indexados à inflação (Tesouro IPCA+) travam esse ganho "
-            "real por prazos longos, ao custo de oscilação no meio do caminho."
-        )
+        ideas.append({
+            "id": "ipca_plus",
+            "text": (
+                "Com juro real alto, títulos indexados à inflação (Tesouro IPCA+) travam esse "
+                "ganho real por prazos longos, ao custo de oscilação no meio do caminho."
+            ),
+        })
 
-    return points
+    return ideas
 
 
 async def fetch(settings) -> ScraperResult:
@@ -260,21 +280,19 @@ async def fetch(settings) -> ScraperResult:
         )
 
     derived = _derive(indicators)
+    ideas = _investment_ideas(indicators, derived)
     data: dict[str, Any] = {
         "indicators": indicators,
         "derived": derived,
-        "talking_points": _talking_points(indicators, derived),
-        "profiles": cfg.get("profiles") or ["conservador", "moderado", "arrojado"],
-        "disclaimer": cfg.get(
-            "disclaimer",
-            "Conteúdo informativo, não é recomendação de investimento.",
-        ),
+        # Pool de ideias; `core/history.apply_investment_idea` escolhe uma e a move para
+        # `idea_of_the_day`, removendo o resto antes de o payload chegar ao modelo.
+        "ideas": ideas,
     }
 
     logger.info(
-        "investments: %s indicadores, %s pontos de apoio",
+        "investments: %s indicadores, %s ideias no pool",
         len(indicators),
-        len(data["talking_points"]),
+        len(ideas),
     )
 
     stock_errors: list[str] = []

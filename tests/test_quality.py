@@ -191,24 +191,22 @@ def test_filtro_sem_historico_nao_mexe_em_nada():
     assert len(payload["world_news"]["items"]) == 3
 
 
-def test_filtro_alcanca_as_promocoes():
+def test_filtro_alcanca_a_secao_local():
     payload = {
-        "promotions": {
-            "offers": [
-                {"text": "Monitor Gamer Samsung Odyssey G5 32 QHD 165Hz por R$ 899"},
-                {"text": "Monitor Gamer AOC AGON G50 27 144Hz por R$ 596"},
-                {"text": "Cadeira Ergonomica Mesh com apoio de cabeca por R$ 357"},
-                {"text": "Whey Isolate Fuse Refil 900g Dark Lab por R$ 59"},
-                {"text": "Perfume Eudora Club 6 Fever por R$ 92"},
-            ]
+        "local": {
+            "items": [
+                {"title": "Prefeitura de Curitiba anuncia obra na Linha Verde"},
+                {"title": "Câmara de Curitiba aprova novo plano diretor"},
+                {"title": "Show de Caetano Veloso na Ópera de Arame"},
+            ],
+            "count": 3,
         }
     }
-    jornal = "Monitor Gamer Samsung Odyssey G5 32 QHD 165Hz por R$ 899 com cupom."
+    jornal = "A Prefeitura de Curitiba anunciou o início da obra na Linha Verde nesta semana."
     history.filter_published_items(payload, _com_jornal(jornal))
-    textos = [oferta["text"] for oferta in payload["promotions"]["offers"]]
-    # O produto de ontem sai; o outro monitor, que é outro produto, fica.
-    assert not any("Samsung Odyssey" in texto for texto in textos)
-    assert any("AOC AGON" in texto for texto in textos)
+    titulos = [i["title"] for i in payload["local"]["items"]]
+    assert not any("Linha Verde" in t for t in titulos)
+    assert any("plano diretor" in t for t in titulos)
 
 
 # --------------------------------------------------------------------------- fallback do LLM
@@ -230,7 +228,7 @@ def _payload_completo() -> dict:
         "finance": {"usd_brl": {"display": "R$ 5,08 (+0,04%)"}},
         "investments": {
             "indicators": {"selic": {"label": "Selic (meta)", "display": "14,00% a.a."}},
-            "disclaimer": "Conteúdo informativo, não é recomendação de investimento.",
+            "idea_of_the_day": {"id": "selic", "text": "A Selic está em 14,00% a.a."},
         },
         "world_news": {"items": [{"title": "Uma notícia"}, {"title": "Outra notícia"}]},
     }

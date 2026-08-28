@@ -6,14 +6,10 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable
 
-from bs4 import BeautifulSoup
-
 from core.utils import (
-    BROWSER_HEADERS,
     ScraperResult,
     format_number_pt_br,
     http_get_json,
-    http_get_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -320,42 +316,9 @@ def _decorate(quotes: dict[str, Any]) -> None:
         ibov["display"] = f"{format_number_pt_br(float(points), 0)} pts{_variation_suffix(ibov)}"
 
 
-# --------------------------------------------------------------------------- manchetes
-
-
-async def _scrape_target(target: dict[str, Any], settings) -> list[dict[str, str]]:
-    url = target.get("url")
-    if not url:
-        return []
-
-    if target.get("use_playwright"):
-        logger.warning("Playwright requested for %s but is not installed; skipping", target.get("name"))
-        return []
-
-    html = await http_get_text(url, settings, headers=BROWSER_HEADERS)
-    soup = BeautifulSoup(html, "lxml")
-    selector = (target.get("selectors") or {}).get("headlines", "h2 a, h3 a")
-    max_items = int((target.get("selectors") or {}).get("max_items", 5))
-    min_length = int((target.get("selectors") or {}).get("min_title_length", 25))
-
-    headlines: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for element in soup.select(selector):
-        title = element.get_text(strip=True)
-        # Seletores genéricos como "h2 a" pegam menu e rodapé junto com as manchetes.
-        if not title or len(title) < min_length or title in seen:
-            continue
-        seen.add(title)
-        headlines.append({"title": title, "url": element.get("href", "")})
-        if len(headlines) >= max_items:
-            break
-    return headlines
-
-
 async def fetch(settings) -> ScraperResult:
     section = "finance"
-    finance_cfg = settings.get("finance") or {}
-    data: dict[str, Any] = {"headlines": []}
+    data: dict[str, Any] = {}
     errors: list[str] = []
 
     quotes, quote_errors = await _fetch_quotes(settings)
@@ -363,18 +326,8 @@ async def fetch(settings) -> ScraperResult:
     errors.extend(quote_errors)
     data.update(quotes)
 
-    for target in finance_cfg.get("scrape_targets", []):
-        try:
-            headlines = await _scrape_target(target, settings)
-            data["headlines"].extend(
-                {"source": target.get("name", "unknown"), **item} for item in headlines
-            )
-        except Exception as exc:
-            logger.warning("Finance scrape failed for %s: %s", target.get("name"), exc)
-            errors.append(f"{target.get('name', 'target')}: {exc}")
-
     has_quotes = any(_has_value(data.get(key)) for key in ASSET_KEYS)
-    if not has_quotes and not data["headlines"]:
+    if not has_quotes:
         return ScraperResult(section=section, status="error", error="; ".join(errors) or "No finance data")
 
     return ScraperResult(

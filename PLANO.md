@@ -479,3 +479,109 @@ As notícias são 57% do payload e os `summary` são 40% desse bloco — mas a m
 cortar em 150, agressivo o bastante para prejudicar o contexto, economizaria 8,7%. Para um modelo de
 1M de contexto na cota gratuita, não paga o risco. E depois do R4.3 ter mais candidatos passou a
 valer **mais**, não menos: o filtro consome candidatos antes do modelo escolher.
+
+---
+
+## Rodada 5 — relevância, legibilidade e foco pessoal (28/08/2026)
+
+Motivada pela leitura diária de quem recebe o jornal. Diagnóstico por seção: **Clima** e **Economia**
+são lidos de relance mas pouco escaneáveis; a frase de manchete da Economia é sempre genérica
+("o mercado reage a movimentações corporativas e à postura defensiva de analistas") e não informa
+nada; **Ideias de investimento** repete os mesmos perfis Conservador/Moderado/Arrojado todo dia;
+**Mundo** traz o global mas nada da cidade onde o leitor mora (Curitiba); **Achados & Promoções**
+está sem produto configurado e cabe melhor num projeto dedicado; as seções de notícia lida por
+inteiro (Tech, Mundo, Cultura Pop) são bloco de texto sem ponto de ancoragem visual.
+
+Ordem de execução: R5.6 → R5.2 → R5.3 → R5.4 → R5.5 → R5.1 → R5.7. Contagem de seções: 10 → 10
+(sai Achados, entra Curitiba).
+
+**Resultado medido (`--dry-run`, 28/08):** 5.937 caracteres, 2 mensagens [3.728 / 2.209], 10 links,
+formatação ok. Praticamente empatado com os ~5,8k de antes — a seção Curitiba e o bullet "Hoje" do
+clima compensaram a saída de Achados e dos 3 bullets de perfil. Continua em 2 mensagens; reavaliar o
+teto na Rodada 6 se incomodar, com este número de base.
+
+### Decisões deliberadas
+
+- **Duas mensagens do Telegram seguem aceitas.** O teto do prompt fica em 4500–5000; a decisão de
+  apertar para caber numa bolha só se toma **com medição real** (`--dry-run` depois de tudo), na
+  Rodada 6 — o mesmo critério da "Medição" da Rodada 4.
+- **Sem arquivo de preferências.** Não há knob suficiente para justificar uma camada nova; o que
+  valer parametrizar vira chave no `config.yaml` que já existe.
+- **Interatividade via serviço ou poll `getUpdates` está fora de escopo** e não entra no backlog —
+  contradiz "job único via cron, não serviço".
+- **Futebol fica como está** — já é condicional e curto (5 linhas de prompt); o "sempre igual" é o
+  Athletico jogar toda semana, não um defeito.
+
+---
+
+- [x] **R5.6 Remover a seção `🛒 ACHADOS & PROMOÇÕES` deste repo.** `product_names: []` está vazio
+  desde sempre e o leitor quer isso como projeto dedicado varrendo muitos grupos (ver R5.7).
+  **Intacta:** a seção `🎮 OFERTAS & GAMES GRÁTIS` inteira — jogos grátis da GamerPower **e** os 3
+  "deals" AAA do CheapShark (pós-R3.4). O `git` guarda o histórico; nada de dead code "por precaução".
+  ✅ **Feito em 28/08.** Removidos: `scrapers/promotions.py`, a entrada em `SCRAPERS` e o import
+  ([main.py](main.py)), a seção e as 3 regras no `SYSTEM_PROMPT`
+  ([core/ai_engine.py](core/ai_engine.py)), `"promotions"` de `COVERAGE_SECTIONS`
+  ([core/history.py](core/history.py)), o bloco `promotions:` do [config.yaml](config/config.yaml),
+  `promotions_history.json` do `.gitignore`, os testes `test_parse_price` / `test_slugify` /
+  `test_coupon` / `test_filtro_alcanca_as_promocoes`, e as menções no README e no CLAUDE.md.
+  `_fallback_journal` já não referenciava a seção. `pytest -q`: 115 passam; `grep -ri promotion` em
+  `scrapers/`, `core/` e `config/` não acha nada.
+
+- [x] **R5.2 Economia sem linha de manchete.** A frase de fechamento sobre `headlines` é sempre vaga
+  porque compete por uma manchete boa com os feeds de Mundo/Tech e perde. Economia passa a ser só os
+  5 bullets de cotação com o `display` formatado em Python.
+  ✅ **Feito em 28/08.** Removidos: `_scrape_target` e os imports `BeautifulSoup` / `BROWSER_HEADERS`
+  / `http_get_text` ([scrapers/finance.py](scrapers/finance.py)), o bloco `finance.scrape_targets` do
+  [config.yaml](config/config.yaml), o campo `headlines` do payload, a linha de manchete do bloco
+  ECONOMIA e "InfoMoney" das notas do CLAUDE.md. `fetch` agora falha só quando não há cotação nenhuma.
+
+- [x] **R5.3 Ideias de investimento sem perfis.** A seção fica: **Referências** + **Destaques da
+  bolsa** (rotação já existente) + **1 bullet "Ideia do dia"**.
+  ✅ **Feito em 28/08.** `_talking_points` → `_investment_ideas`, agora retorna dicts `{id, text}`
+  com `id` estável ([investments.py](scrapers/investments.py)); o payload leva o pool em `ideas`.
+  Novo `history.apply_investment_idea` (janela `investment_idea_window_days: 5`) escolhe a menos
+  usada por `_highlight_counts("investment_idea")`, move para `idea_of_the_day` e tira o pool do
+  payload; `extract_highlights` registra o `id` escolhido; chamado no [main.py](main.py) junto do
+  rodízio de ações. Removidos do prompt: bullets de perfil, a linha do disclaimer, a regra 9 sobre
+  "profile bullet"; `idea_of_the_day` entrou nas fontes numéricas permitidas. Removidos do
+  scraper/config: `profiles`, `disclaimer`. `_fallback_journal` mostra a ideia, sem disclaimer.
+  5 testes novos.
+
+- [x] **R5.4 Clima escaneável com emoji de condição.**
+  ✅ **Feito em 28/08.** `_wmo_emoji` em [weather.py](scrapers/weather.py) (0-1 ☀️, 2 ⛅, 3 ☁️,
+  45-48 🌫️, 51-57 🌦️, 61-67/80-82 🌧️, 71-77/85-86 🌨️, 95-99 ⛈️); payload expõe
+  `condition_now_emoji` e `today_summary` ("🌧️ Chuva moderada") a partir do `weather_code` diário
+  que antes era ignorado. Setas 🔺/🔻 coladas no `vs_ontem` por `enrich_payload` (limiar 3 °C, que
+  já existia). Prompt: bullet "Agora" abre pelo emoji, **novo bullet "Hoje"** copia `today_summary`;
+  `_fallback_journal` também mostra "Hoje". Teste parametrizado de `_wmo_emoji`. Verificado com
+  `--no-llm`: `today_summary` = "🌦️ Garoa fraca".
+
+- [x] **R5.5 Rótulo em negrito nas seções de notícia.**
+  ✅ **Feito em 28/08.** Nova regra "NEWS SECTIONS" no `SYSTEM_PROMPT`: cada bullet de Tech, Mundo,
+  Curitiba e Cultura Pop abre com o sujeito em `<b>…:</b>` (rótulo de 1-3 palavras); válvula de
+  rótulo temático quando não há sujeito único; `<b>` proibido no meio da frase; não vale para os
+  repos do GitHub Trending nem para o resumo do futebol. A regra 9 que mandava "não abrir bullet
+  com rótulo em negrito" foi reescrita para o contrário.
+
+- [x] **R5.1 Nova seção `📍 CURITIBA & PARANÁ`.** Posição: **depois de MUNDO, antes de CULTURA POP**.
+  Feeds: **Gazeta do Povo – PR** (`gazetadopovo.com.br/feed/rss/parana.xml`) + **Tribuna do Paraná**
+  (`tribunapr.com.br/feed/`). g1 PR ficou de fora (Globo bloqueia validação; testar na VPS antes de
+  somar como terceiro).
+  ✅ **Feito em 28/08.** `rss_feeds.local` no [config.yaml](config/config.yaml), entrada `local` em
+  `SCRAPERS` ([main.py](main.py)) — o `news_rss.fetch(category="local")` já resolve para a seção
+  `local` sem código novo. No `SYSTEM_PROMPT`: título na lista de seções, regra de conteúdo
+  ("até 3 fatos"; priorizar política municipal/estadual, economia, obras, trânsito, eventos;
+  ignorar obituário/horóscopo/loteria/policial de rotina; omitir se nada), entrada nas NEWS
+  SECTIONS (rótulo em negrito), na regra de links e na anti-repetição (regra 12). `local` em
+  `COVERAGE_SECTIONS` (mínimo 2) e no `_fallback_journal`. Teste de cobertura para a seção.
+  Verificado com `--no-llm`: 9 itens de Curitiba/PR, conteúdo regional.
+
+- [x] **R5.7 `PROMOCOES_PROJETO.md` — doc de handoff.**
+  ✅ **Feito em 28/08.** [PROMOCOES_PROJETO.md](PROMOCOES_PROJETO.md) na raiz, 10 seções: objetivo
+  e recorte (não é comparador de preço, não é bot de afiliados, não é serviço 24/7), arquitetura
+  como fork (tabela do que reaproveitar do Jornal), contrato do scraper, leitura via
+  `https://t.me/s/<canal>` com os pontos que o código antigo já resolveu, filtros/limites em
+  Python (`max_per_coupon`, `filter_published_items`), schema de config, formato da mensagem
+  (template Python padrão, LLM opcional), deploy cron, "como achar e validar um canal novo" +
+  candidatos, e critério de pronto. Aponta para o `scrapers/promotions.py` no histórico do git
+  como referência.

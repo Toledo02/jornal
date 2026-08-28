@@ -22,7 +22,6 @@ from scrapers import (
     github_trending,
     investments,
     news_rss,
-    promotions,
     weather,
 )
 
@@ -34,11 +33,11 @@ SCRAPERS: list[tuple[str, ScraperFn]] = [
     ("investments", investments.fetch),
     ("tech_news", lambda s: news_rss.fetch(s, category="tech")),
     ("world_news", lambda s: news_rss.fetch(s, category="world")),
+    ("local", lambda s: news_rss.fetch(s, category="local")),
     ("pop_culture", lambda s: news_rss.fetch(s, category="pop_culture")),
     ("github_trending", github_trending.fetch),
     ("gaming", gaming.fetch),
     ("football", football.fetch),
-    ("promotions", promotions.fetch),
 ]
 
 LAST_JOURNAL_FILE = "last_journal.txt"
@@ -200,6 +199,15 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
         window_days=int(
             history_cfg.get(
                 "stock_repeat_window_days", history_store.DEFAULT_STOCK_REPEAT_WINDOW_DAYS
+            )
+        ),
+    )
+    history_store.apply_investment_idea(
+        payload,
+        history,
+        window_days=int(
+            history_cfg.get(
+                "investment_idea_window_days", history_store.DEFAULT_INVESTMENT_IDEA_WINDOW_DAYS
             )
         ),
     )

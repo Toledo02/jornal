@@ -5,15 +5,6 @@ weather:
   # A partir de qual chance por hora vale avisar "vai chover entre X e Y".
   rain_threshold_percent: 40
 
-finance:
-  scrape_targets:
-    - name: "InfoMoney Mercados"
-      url: "https://www.infomoney.com.br/mercados/"
-      use_playwright: false
-      selectors:
-        headlines: "h2 a, h3 a"
-        max_items: 5
-
 investments:
   enabled: true
   # Séries do SGS do Banco Central (api.bcb.gov.br) — públicas, sem chave e sem cota.
@@ -36,8 +27,6 @@ investments:
       code: 195
       label: "Poupança"
       unit: "a.m."
-  profiles: ["conservador", "moderado", "arrojado"]
-  disclaimer: "Conteúdo informativo, não é recomendação de investimento."
   # Pool de ações/ETFs elegíveis a aparecer em "Destaques da bolsa" — maior que o exibido por
   # dia para dar folga ao rodízio (mesmo princípio do cheapshark.candidate_pool/max_deals).
   stock_pool:
@@ -67,6 +56,11 @@ rss_feeds:
     - "https://br.ign.com/feed.xml"
     - "https://www.legiaodosherois.com.br/feed"
     - "https://www.polygon.com/rss/index.xml"
+  local:
+    # Curitiba / Paraná. Validados em 28/08/2026 (sem bot-block). g1 PR ficou de fora: a Globo
+    # bloqueia a validação e o comportamento na VPS pode diferir — testar lá antes de adicionar.
+    - "https://www.gazetadopovo.com.br/feed/rss/parana.xml"
+    - "https://www.tribunapr.com.br/feed/"
 
 rss:
   entries_per_feed: 6
@@ -167,33 +161,6 @@ football:
         - "tudo sobre"
         - "na globo, sportv"
 
-promotions:
-  # Fonte principal: canais públicos de promoção. Lidos via https://t.me/s/<canal>, a prévia
-  # web que o Telegram publica — sem bot, sem token, sem entrar no canal.
-  telegram_channels:
-    - "promobit"
-    - "promocoesdodia"
-    - "hardmob_promo"
-  max_age_hours: 24
-  per_channel: 5
-  max_items: 10
-  # Teto por campanha: o mesmo cupom em cinco produtos tomava a seção inteira (num jornal real,
-  # 3 dos 4 achados eram o mesmo "OFERTA8DO8" do Mercado Livre).
-  max_per_coupon: 2
-  noise_patterns:
-    - "sorteio"
-    - "participe do grupo"
-    - "entre no nosso"
-    - "clique aqui para receber"
-    - "grupo de whatsapp"
-
-  # Opcional: acompanha o preço de produtos específicos entre execuções (via Buscapé).
-  # Use marca e modelo — a busca pega o primeiro resultado, então termo vago monitora
-  # o produto errado. Ex.: "SSD Kingston NV2 1TB M.2 NVMe".
-  product_names: []
-  drop_threshold_percent: 5
-  history_file: "promotions_history.json"
-
 history:
   file: "history.json"
   # Janela do histórico. Dias mais antigos são descartados a cada gravação, então o arquivo
@@ -208,6 +175,8 @@ history:
   # Por quantos dias uma ação/ETF já destacada em IDEIAS DE INVESTIMENTO continua bloqueada.
   # Pool menor que o de jogos, então a janela também é menor.
   stock_repeat_window_days: 3
+  # Por quantos dias a "ideia do dia" de investimento fica de molho antes de poder repetir.
+  investment_idea_window_days: 5
 
 orchestrator:
   scraper_timeout_seconds: 30
