@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Visão geral
 
 Agente Python que coleta dados de várias fontes (clima, câmbio, RSS, GitHub, gaming, futebol),
-consolida via Gemini e envia um jornal matinal em pt-BR pelo Telegram. Roda como job único
+consolida via Gemini e publica um jornal matinal em pt-BR como **página web**, servida pelo nginx da
+VPS só dentro da tailnet. O Telegram recebe apenas um aviso curto com o link. Roda como job único
 via cron às 05:55, não como serviço.
 
 [PLANO.md](PLANO.md) mantém o backlog de melhorias com o diagnóstico que originou cada item — vale
@@ -18,11 +19,11 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 cp config/.env.example config/.env
 
-python main.py                        # pipeline completo (envia ao Telegram)
-python main.py --dry-run              # gera e imprime, sem enviar
+python main.py                        # pipeline completo (publica a página e avisa no Telegram)
+python main.py --dry-run              # gera e escreve logs/preview.html, sem publicar nem avisar
 python main.py --no-llm               # só coleta e imprime o payload, sem gastar requisição
 python main.py --only gaming,finance  # subconjunto de scrapers
-python -m pytest -q                   # 127 testes, sem rede
+python -m pytest -q                   # 137 testes, sem rede
 ```
 
 Ao iterar em scrapers use `--no-llm --only <scraper>`: não consome cota do Gemini nem envia mensagem.
@@ -30,7 +31,7 @@ Ao iterar em scrapers use `--no-llm --only <scraper>`: não consome cota do Gemi
 ## Arquitetura
 
 Pipeline linear em [main.py](main.py): `load_settings` → scrapers em paralelo → `generate_journal`
-(LLM) → `sanitize_html` → `send_journal`.
+(LLM, devolve JSON) → `render_html` → `write_page` → `send_alert` com o link.
 
 **Contrato dos scrapers.** Cada um expõe `async def fetch(settings) -> ScraperResult` e é registrado
 em `SCRAPERS` ([main.py](main.py)). `ScraperResult` ([core/utils.py](core/utils.py)) tem `status` =
@@ -43,14 +44,19 @@ AwesomeAPI 47 dias, sem ninguém notar: a cadeia de fallback é boa o bastante p
 Ao adicionar uma fonte, garanta que a falha dela apareça no `status` — mas só quando o resultado
 final for pior por causa dela (ver "Alerta é sobre resultado" abaixo).
 
-**Camada LLM.** [core/ai_engine.py](core/ai_engine.py) usa `google-genai`, com backoff 10s→30s→90s e
-fallback para os modelos de `llm_fallback_models`. Erros 4xx não são repetidos (`_is_permanent`).
-Se tudo falhar, `_fallback_journal` produz um resumo em **texto puro** — sem marcação, para
-atravessar o sanitizador intacto.
+**Camada LLM.** [core/ai_engine.py](core/ai_engine.py) usa `google-genai` em modo JSON
+(`response_mime_type` + `RESPONSE_SCHEMA`), com backoff 10s→30s→90s e fallback para os modelos de
+`llm_fallback_models`. Erros 4xx não são repetidos (`_is_permanent`); JSON inválido ou resposta sem
+nenhuma seção aproveitável (`_coerce_journal`) conta como falha e vale nova tentativa. Se tudo
+falhar, `_fallback_journal` devolve a **mesma estrutura** montada direto do payload, com
+`degraded: True` — a página sai pelo renderer normal, avisando no topo que o gerador de texto falhou.
 
-**Envio.** [core/telegram_sender.py](core/telegram_sender.py) faz `sanitize_html` (mantém só o
-subset do Telegram, converte tags de bloco em quebra, escapa `&`/`<`/`>`), divide acima de 4096
-fechando e reabrindo tags no corte, e em caso de erro reenvia com as tags removidas.
+**Publicação.** [core/renderer.py](core/renderer.py) transforma a estrutura em página (`render_html`)
+e em texto (`render_text`), e `write_page` grava de forma atômica (`.tmp` + `os.replace`) no caminho
+de `JOURNAL_HTML_PATH`. Na VPS é `/var/www/jornal/index.html`, servido pelo nginx em
+`https://oci-vps.taildcf79e.ts.net:8446/` só dentro da tailnet — `/home/ubuntu` é 0750 e o `www-data`
+não atravessa, por isso a página **não** é servida de dentro do repo.
+[core/telegram_sender.py](core/telegram_sender.py) só manda texto puro: o link do dia e os alertas.
 
 ## Pontos de atenção
 
@@ -65,20 +71,19 @@ do CheapShark parecia bloqueio de IP e a resposta dizia exatamente qual era o pr
 para os alvos de scraping de HTML — GE Globo e GitHub Trending. As duas famílias de site querem
 coisas opostas.
 
-**O `SYSTEM_PROMPT` é a camada de apresentação.** Seções, ordem, emojis, onde links são permitidos e
-formatação vivem no prompt ([core/ai_engine.py](core/ai_engine.py)), não em código. Restrições que
-já custaram bug: só `<b>`, `<i>` e `<a href>`; bullets com `•` (o modelo recorre a `*` do Markdown se
-não mandarem o contrário, e `*` aparece literal em HTML); a regra anti-repetição é escopada às
-seções de notícia — Clima e Economia são exemplos de conteúdo que **deve** repetir todo dia.
-
-**Título de seção não tem tamanho de fonte.** O Telegram não expõe nada equivalente a `<h2>`: o
-subset dele tem só negrito, itálico, sublinhado, tachado, código e link. O que faz um cabeçalho
-parecer cabeçalho é a convenção do prompt — régua `━━━━━━━━━━━━━━━`, título em CAIXA ALTA dentro de
-`<b>`, linha em branco antes do conteúdo. Tag de heading no output é convertida em quebra de linha
-pelo sanitizador, então pedir `<h2>` ao modelo não falha: só apaga o título.
+**A apresentação saiu do prompt e virou código (Rodada 6).** Título, emoji, ordem das seções,
+cabeçalho de data e CSS vivem em `SECTIONS`/`STYLE` ([core/renderer.py](core/renderer.py)); o
+`SYSTEM_PROMPT` ([core/ai_engine.py](core/ai_engine.py)) só define **conteúdo**. O modelo devolve
+entradas `{label, text, url, url_label}` em texto puro, e voltar a pedir marcação a ele é regressão:
+o renderer escapa tudo com `html.escape`, então tag vinda do modelo apareceria literal na página.
+Link também é estrutura, não texto — `url` vem do payload e o renderer só aceita `http(s)`. A regra
+anti-repetição segue escopada às seções de notícia; Clima e Economia são exemplos de conteúdo que
+**deve** repetir todo dia. Seção nova = uma entrada em `SECTIONS`, o id no `RESPONSE_SCHEMA` (vem de
+`SECTION_IDS`), as regras no prompt e a seção em `COVERAGE_SECTIONS`
+([core/history.py](core/history.py)).
 
 **Seções lidas por tópico.** Clima e Investimentos são consultados de relance, não lidos como
-parágrafo — cada fato tem seu bullet com rótulo em negrito, e as strings chegam prontas do Python
+parágrafo — cada fato é uma entrada com seu `label`, e as strings chegam prontas do Python
 (`rain_summary`, `sun_summary`, `uv_summary`, `today_summary`, `idea_of_the_day`). O emoji de
 condição do clima (`_wmo_emoji`, ☀️/⛅/☁️/🌧️/⛈️…) também é montado em Python e não escolhido pelo
 modelo: o mesmo código WMO tem que dar sempre o mesmo ícone. As setas 🔺/🔻 da máxima vêm coladas
@@ -143,7 +148,8 @@ antes do corte — concatenar e truncar fazia os primeiros feeds consumirem todo
 
 **`news_rss.py` é genérico por categoria.** Uma seção nova de notícias (ex.: `local`, a
 `📍 CURITIBA & PARANÁ`) é só: `rss_feeds.<cat>` no config, uma entrada em `SCRAPERS`
-([main.py](main.py)), as regras no `SYSTEM_PROMPT` e a seção em `COVERAGE_SECTIONS`
+([main.py](main.py)), as regras no `SYSTEM_PROMPT`, a seção em `SECTIONS`
+([core/renderer.py](core/renderer.py)), em `COVERAGE_SECTIONS`
 ([core/history.py](core/history.py)) e no `_fallback_journal`. Não há lógica por categoria dentro
 do scraper além do nome. O `local` usa Gazeta do Povo PR + Tribuna PR; o g1 PR ficou de fora porque
 a Globo bloqueia a validação — testar na VPS antes de somar. A triagem de obituário/horóscopo/
@@ -164,8 +170,11 @@ alertas montam o emoji só na hora de enviar (`_format_issues`). Pelo mesmo moti
 
 **Estado local em `logs/`:** `history.json` ([core/history.py](core/history.py)) guarda 30 dias com
 poda automática — o texto dos jornais alimenta a anti-repetição (3 últimos vão ao prompt) e as
-métricas alimentam o contexto comparativo ("maior valor em 30 dias"). Só é gravado após envio
-bem-sucedido: um jornal que não chegou não pode suprimir as notícias dele amanhã. Migra sozinho o
+métricas alimentam o contexto comparativo ("maior valor em 30 dias"). O campo `journal` guarda a
+projeção de `render_text`, **não** o JSON nem o HTML: `filter_published_items` compara nomes próprios
+contra esse texto, e guardar marcação encheria a comparação de nome de tag. Só é gravado após a
+página ir para o disco: um jornal que não foi publicado não pode suprimir as notícias dele amanhã —
+falha no aviso do Telegram, porém, não desfaz a publicação. Migra sozinho o
 `last_journal.txt` da versão anterior. `football_teams.json` cacheia os ids resolvidos da API.
 
 **Alerta é sobre resultado, não sobre fonte.** Uma fonte que falha mas é coberta pelo fallback vai

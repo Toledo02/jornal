@@ -5,15 +5,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import re
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Awaitable, Callable
 
 from config.settings import load_settings
 from core.ai_engine import generate_journal
-from core.telegram_sender import inspect_message, send_alert, send_journal
-from core.utils import ScraperResult, now_local, setup_logging, strip_html
+from core.renderer import render_html, render_text, write_page
+from core.telegram_sender import send_alert
+from core.utils import ScraperResult, format_date_pt_br, now_local, setup_logging
 from core import history as history_store
 from scrapers import (
     finance,
@@ -216,60 +217,83 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
     previous = history_store.recent_journals(history, journals_in_prompt)
     logger.info("Histórico: %s dias guardados, %s jornais no prompt", len(history), len(previous))
 
-    journal_text = generate_journal(payload, settings, previous)
-    logger.info("Journal generated (%s chars)", len(journal_text))
+    now = now_local()
+    journal = generate_journal(payload, settings, previous)
+    journal_text = render_text(journal, date_header=format_date_pt_br(now))
+    page = render_html(
+        journal,
+        date_header=format_date_pt_br(now),
+        generated_at=now.strftime("%H:%M"),
+        city=settings.get("weather", "city", default=""),
+    )
+    logger.info(
+        "Journal generated (%s seções, %s chars de página)",
+        len(journal.get("sections") or []),
+        len(page),
+    )
 
     if args.dry_run:
-        _preview(journal_text, issues)
+        _preview(journal_text, write_page(page, _preview_path(settings)), issues)
         return 0
 
     try:
-        send_journal(journal_text, settings)
-        logger.info("Journal sent to Telegram successfully")
-        # Só grava após envio bem-sucedido: um jornal que não chegou não deve contar como
-        # "já publicado" e suprimir as notícias dele amanhã.
-        try:
-            updated = history_store.record(
-                history,
-                now_local().date(),
-                journal_text,
-                history_store.extract_metrics(payload),
-                history_store.extract_highlights(payload),
-            )
-            history_store.save(history_file, updated, retention_days)
-            logger.info("Histórico atualizado (%s dias)", len(updated))
-        except Exception as exc:
-            logger.warning("Failed to save history: %s", exc)
+        published = write_page(page, _output_path(settings))
+        logger.info("Página publicada em %s", published)
     except Exception as exc:
-        logger.error("Failed to send journal: %s", exc)
+        logger.error("Failed to publish journal: %s", exc)
         _notify(
-            f"🔥 Jornal Matinal não pôde ser enviado\n\n{_clean_error(str(exc), 500)}",
+            f"🔥 Jornal Matinal não pôde ser publicado\n\n{_clean_error(str(exc), 500)}",
             settings,
         )
         return 1
 
-    if issues:
-        _notify(
-            "🩺 O jornal foi enviado, mas há fontes com falha:\n\n" + _format_issues(issues),
-            settings,
+    # Grava só depois da página no disco: publicado é estar legível na URL. O alerta é apenas o
+    # aviso — se ele falhar, o jornal saiu de todo modo e não deve ser recontado amanhã.
+    try:
+        updated = history_store.record(
+            history,
+            now.date(),
+            journal_text,
+            history_store.extract_metrics(payload),
+            history_store.extract_highlights(payload),
         )
+        history_store.save(history_file, updated, retention_days)
+        logger.info("Histórico atualizado (%s dias)", len(updated))
+    except Exception as exc:
+        logger.warning("Failed to save history: %s", exc)
 
+    _notify(_ready_message(settings, now, issues), settings)
     return 0
 
 
-def _preview(journal_text: str, issues: list[tuple[str, str, str]]) -> None:
-    """Mostra o jornal como ele será lido, mais o que só se vê no formato de transporte."""
-    report = inspect_message(journal_text)
-    sizes = report["chunk_sizes"]
+def _output_path(settings) -> Path:
+    if settings.html_output_path:
+        return Path(settings.html_output_path)
+    return settings.project_root / "site" / "index.html"
 
+
+def _preview_path(settings) -> Path:
+    return settings.project_root / "logs" / "preview.html"
+
+
+def _ready_message(settings, now: datetime, issues: list[tuple[str, str, str]]) -> str:
+    """Aviso curto de que a página está pronta — a leitura acontece no site, não aqui."""
+    link = f"\n\n{settings.journal_url}" if settings.journal_url else ""
+    message = f"📰 Jornal de {now.strftime('%d/%m')} pronto{link}"
+    if issues:
+        message += "\n\n🩺 Fontes com falha:\n" + _format_issues(issues)
+    return message
+
+
+def _preview(journal_text: str, page: Path, issues: list[tuple[str, str, str]]) -> None:
+    """Imprime a projeção de texto e aponta a página para abrir no navegador."""
     print()
     print("=" * 72)
-    # Renderizado, não o HTML cru: "&amp;" chega ao Telegram como "&" e assustaria à toa.
-    print(strip_html(report["sanitized"], keep_newlines=True))
+    print(journal_text)
     print("=" * 72)
     print()
-    print(f"  {sum(sizes)} caracteres, {len(sizes)} mensagem(ns) {sizes}, {report['links']} links")
-    print(f"  formatação: {'; '.join(report['problems']) if report['problems'] else 'ok'}")
+    print(f"  página: {page}")
+    print(f"  {len(journal_text)} caracteres na projeção que vai para o histórico")
 
     if issues:
         print()

@@ -1,7 +1,7 @@
 # Jornal Matinal — Agente de Clipping Pessoal
 
 Agente Python config-driven que coleta dados de múltiplas fontes, consolida via LLM (Google Gemini)
-e envia um jornal matinal personalizado pelo Telegram.
+e publica um jornal matinal personalizado como página web. O Telegram recebe só o aviso com o link.
 
 ## Estrutura
 
@@ -13,7 +13,7 @@ Jornal/
 │   ├── config.yaml       # Fontes, URLs, times, produtos
 │   └── settings.py       # Carregador de config
 ├── scrapers/             # Coletores de dados
-├── core/                 # IA e Telegram
+├── core/                 # IA, renderização da página e Telegram
 ├── tests/                # Testes das funções puras
 ├── main.py               # Orquestrador
 └── PLANO.md              # Backlog de melhorias com diagnóstico
@@ -44,7 +44,9 @@ Edite `config/.env`:
 | `LLM_MODEL` | Modelo (padrão: `gemini-3.6-flash`; os `pro` dão 429 no plano gratuito) |
 | `LLM_FALLBACK_MODELS` | Modelos tentados se o principal der 503 |
 | `TELEGRAM_BOT_TOKEN` | Token do BotFather |
-| `TELEGRAM_CHAT_ID` | ID do chat de destino |
+| `TELEGRAM_CHAT_ID` | ID do chat de destino (recebe o aviso com o link) |
+| `JOURNAL_HTML_PATH` | Onde a página é escrita (vazio: `<projeto>/site/index.html`) |
+| `JOURNAL_URL` | Endereço da página, usado no aviso do Telegram |
 | `FOOTBALL_DATA_TOKEN` | Jogos e placares ([football-data.org](https://www.football-data.org/client/register), grátis) |
 | `AWESOMEAPI_TOKEN` | Opcional; a AwesomeAPI é a última fonte da cadeia de cotações |
 
@@ -54,8 +56,8 @@ OpenAI), mas os `LLM_*` têm precedência.
 ## Execução
 
 ```bash
-python main.py                      # pipeline completo: coleta, gera e envia
-python main.py --dry-run            # gera e imprime no terminal, sem enviar
+python main.py                      # pipeline completo: coleta, gera, publica e avisa
+python main.py --dry-run            # gera e escreve logs/preview.html, sem publicar nem avisar
 python main.py --no-llm             # só coleta e imprime o payload (não gasta requisição)
 python main.py --only weather,finance   # roda um subconjunto de scrapers
 ```
@@ -92,13 +94,13 @@ fonte contribui proporcionalmente. Entradas mais velhas que `max_age_hours` são
 
 | Cenário | Comportamento |
 |---------|---------------|
-| Um scraper falha | Jornal enviado com as demais seções, **e um alerta no Telegram** |
+| Um scraper falha | Página publicada com as demais seções, **e um alerta no Telegram** |
 | Uma fonte de cotação falha | Os ativos faltantes são buscados na fonte seguinte, um a um |
 | Menos de `min_sections_for_send` seções | Pipeline aborta e avisa pelo Telegram |
 | LLM retorna 503 | Backoff 10s → 30s → 90s, depois tenta os modelos de reserva |
-| LLM falha de vez | Fallback em texto puro |
-| Telegram rejeita o HTML | Reenvia sem marcação, com as tags removidas |
-| Mensagem acima de 4096 chars | Dividida sem cortar tags no meio |
+| LLM devolve JSON inválido | Conta como falha e entra no mesmo backoff |
+| LLM falha de vez | Página montada direto do payload, avisando que saiu em modo fallback |
+| Aviso do Telegram falha | Só vai para o log: a página já está publicada |
 
 Falhas parciais geram alerta **quando faltam dados no jornal final**. Uma fonte que falha mas é
 coberta pelo fallback fica só no log: alertar todo dia sobre algo que não afeta o resultado
@@ -120,8 +122,8 @@ impede a mesma oferta de voltar todo dia.
 3. **Investimentos** — séries do Banco Central (SGS): Selic, CDI, IPCA e poupança, com juro real
    calculado em Python e uma "ideia do dia" rotacionada pelo histórico
 4. **Tech** — RSS
-5. **Mundo** — RSS (LLM seleciona 3 fatos globais)
-6. **Curitiba & Paraná** — RSS local (Gazeta do Povo PR, Tribuna PR), até 3 fatos
+5. **Mundo** — RSS (o LLM seleciona os fatos globais, até `presentation.items_per_news_section`)
+6. **Curitiba & Paraná** — RSS local (Gazeta do Povo PR, Tribuna PR)
 7. **Cultura Pop** — RSS
 8. **GitHub Trending** — scraping
 9. **Gaming** — giveaways da GamerPower + ofertas do CheapShark, filtradas por nota, volume de
@@ -139,6 +141,47 @@ crontab -e
 ```
 
 Certifique-se de que `config/.env` existe na VPS.
+
+### Servindo a página (nginx, só na tailnet)
+
+O job escreve um `index.html` estático; o nginx só o serve. Não há processo novo rodando.
+
+```bash
+sudo mkdir -p /var/www/jornal
+sudo chown ubuntu:www-data /var/www/jornal && sudo chmod 755 /var/www/jornal
+```
+
+O diretório fica fora de `/home/ubuntu` porque o home é `0750` e o `www-data` não o atravessa —
+servir de dentro do repo daria 403. Site em `/etc/nginx/sites-available/jornal`:
+
+```nginx
+server {
+    listen 100.74.153.56:8446 ssl;          # IP da tailnet, não a interface pública
+    server_name oci-vps.taildcf79e.ts.net;
+
+    ssl_certificate     /etc/ssl/tailscale/oci-vps.taildcf79e.ts.net.crt;
+    ssl_certificate_key /etc/ssl/tailscale/oci-vps.taildcf79e.ts.net.key;
+
+    root /var/www/jornal;
+    index index.html;
+    charset utf-8;
+    add_header Cache-Control "no-store";     # senão o celular abre o jornal de ontem
+
+    location / { try_files $uri $uri/ =404; }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/jornal /etc/nginx/sites-enabled/jornal
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+E no `config/.env` da VPS:
+
+```
+JOURNAL_HTML_PATH=/var/www/jornal/index.html
+JOURNAL_URL=https://oci-vps.taildcf79e.ts.net:8446/
+```
 
 > **Atenção:** a VPS recebe respostas diferentes das da sua máquina. O CheapShark exige
 > User-Agent descritivo e a AwesomeAPI aplica cota por IP. Valide scrapers **na VPS**, não só

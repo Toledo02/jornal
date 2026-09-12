@@ -585,3 +585,69 @@ teto na Rodada 6 se incomodar, com este número de base.
   (template Python padrão, LLM opcional), deploy cron, "como achar e validar um canal novo" +
   candidatos, e critério de pronto. Aponta para o `scrapers/promotions.py` no histórico do git
   como referência.
+
+---
+
+## Rodada 6 — o jornal vira página web na tailnet (12/09/2026)
+
+O jornal era um texto único no subset HTML do Telegram, e o teto de 4096 caracteres por mensagem era
+o que ditava a apresentação: prompt limitado a 4000-5000 chars, 3 itens por seção de notícia,
+cabeçalho falso com régua `━━━━━━━━━━━━━━━` porque não existe `<h2>`, link proibido fora de duas
+seções. A medição da Rodada 5 (5.937 chars, 2 mensagens) fechou o assunto do teto pelo outro lado:
+em vez de apertar o texto para caber numa bolha, a saída passa a ser uma **página web** servida pelo
+nginx da VPS só dentro da tailnet, e o Telegram recebe apenas o aviso com o link.
+
+A VPS já tinha tudo: nginx ativo, outros serviços expostos só na tailnet (`homer-dashboard` na :80,
+`tailscale-services` nas :8443-8445) e o cert do Tailscale renovado por cron root no dia 1º. O job
+continua único, às 05:55 — muda só para onde ele escreve.
+
+### Decisões deliberadas
+
+- **O Gemini devolve JSON, o Python renderiza.** A alternativa (o modelo emitir a página com CSS)
+  economizaria código e custaria o que este repo mais evita: layout mudando de um dia para o outro,
+  quebra silenciosa de CSS e mais tokens de saída. Mesma razão de "números vêm formatados de Python".
+- **O Telegram recebe só o alerta com o link.** O texto completo não vai mais; celular sem Tailscale
+  conectado vê o aviso e não o jornal — aceito conscientemente.
+- **A página guarda só o dia de hoje.** `index.html` sobrescrito a cada execução; o `history.json` já
+  guarda 30 dias de texto para a anti-repetição. Arquivo de edições anteriores seria superfície nova
+  (poda, listagem) sem demanda — YAGNI, igual à Rodada 5.
+- **Uma execução por dia, como antes.** Coletar notícia ao longo do dia foi considerado e ficou fora:
+  exigiria deduplicação intradiária e reavaliação da janela de chuva (que hoje assume leitura às
+  5h55), e aproximaria o projeto do serviço 24/7 que está fora de escopo desde a Rodada 5.
+
+---
+
+- [x] **R6.1 Contrato JSON no lugar do texto-do-Telegram.** `generate_journal` devolve `dict`;
+  `RESPONSE_SCHEMA` + `response_mime_type="application/json"` no `_generate_once`; `_coerce_journal`
+  descarta id desconhecido e entrada sem texto, e levanta erro quando não sobra nada (aciona o retry
+  em vez de publicar página vazia). Entrada uniforme `{label, text, url, url_label}` em qualquer
+  seção. Do `SYSTEM_PROMPT` saíram as regras de tag/bullet, cabeçalho de data, régua + CAIXA ALTA,
+  links-só-em-duas-seções e o teto de caracteres; ficaram as regras de conteúdo por seção, a omissão
+  de seção vazia e a anti-repetição. `_fallback_journal` devolve a mesma estrutura com
+  `degraded: True`.
+
+- [x] **R6.2 `core/renderer.py` — a apresentação em código.** `SECTIONS` (id, emoji, título, ordem),
+  `STYLE` (mobile-first, tema claro/escuro por `prefers-color-scheme`, seções em card, chips de
+  navegação), `render_html` (página única autocontida, tudo escapado com `html.escape`, `url` só
+  `http(s)`), `render_text` (projeção que vai para o `history.json`, mantendo os 30 dias já gravados
+  válidos sem migração) e `write_page` (escrita atômica `.tmp` + `os.replace`).
+
+- [x] **R6.3 Pipeline e publicação.** `main.py`: renderiza, escreve em `JOURNAL_HTML_PATH`
+  (default `<projeto>/site/index.html`) e manda um aviso curto com `JOURNAL_URL`, com os problemas de
+  fonte anexados na mesma mensagem em vez de um 🩺 separado. Histórico gravado após a página no
+  disco — publicado é estar legível na URL; falha no aviso não desfaz a publicação. `--dry-run`
+  escreve `logs/preview.html` e imprime a projeção de texto. Novos knobs em `config.yaml`:
+  `presentation.items_per_news_section: 5` e `max_github_repos: 5` (3 era limite do Telegram).
+
+- [x] **R6.4 Limpeza da camada de envio.** Apagados `sanitize_html`, `_open_tags`, `inspect_message`,
+  `send_journal`, `ALLOWED_TAGS` e `BLOCK_TAGS` ([core/telegram_sender.py](core/telegram_sender.py)):
+  nada mais manda marcação. `_split_message` ficou só com o corte por linhas (aviso acima de 4096 é
+  improvável, mas a API rejeita em vez de truncar). Testes: saíram os 7 de `sanitize_html` e os 2 de
+  reabertura de tag, os de `_fallback_journal` passaram a checar a estrutura; entraram 11 novos
+  (escape de `<script>` vindo de feed, `javascript:` descartado, ordem/omissão de seção, projeção de
+  texto alimentando `filter_published_items`, `write_page` atômico, `_coerce_journal`). 137 passam.
+
+- [ ] **R6.5 Deploy na VPS.** `/var/www/jornal` com `ubuntu:www-data` (servir de dentro de
+  `/home/ubuntu`, que é 0750, daria 403), site nginx na :8446 com o cert do Tailscale já existente,
+  `JOURNAL_HTML_PATH` e `JOURNAL_URL` no `.env` de lá. `Cache-Control: no-store` para o celular não
+  abrir o jornal de ontem. A linha do cron das 05:55 não muda.

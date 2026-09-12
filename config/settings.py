@@ -39,6 +39,10 @@ class Settings:
     telegram_chat_id: str = ""
     awesomeapi_token: str = ""
     football_data_token: str = ""
+    # Onde a página é escrita e por qual URL ela é lida. Ficam no .env porque mudam por máquina:
+    # na VPS é /var/www/jornal servido pelo nginx na tailnet, aqui é a pasta do projeto.
+    html_output_path: str = ""
+    journal_url: str = ""
 
     def get(self, *keys: str, default: Any = None) -> Any:
         node: Any = self.config
@@ -121,4 +125,6 @@ def load_settings(
         telegram_chat_id=_env("TELEGRAM_CHAT_ID"),
         awesomeapi_token=_env("AWESOMEAPI_TOKEN"),
         football_data_token=_env("FOOTBALL_DATA_TOKEN"),
+        html_output_path=_env("JOURNAL_HTML_PATH"),
+        journal_url=_env("JOURNAL_URL"),
     )

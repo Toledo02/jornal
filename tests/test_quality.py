@@ -15,8 +15,7 @@ import pytest
 
 from core import history
 from core.ai_engine import _fallback_journal
-from core.telegram_sender import sanitize_html
-from core.utils import format_date_pt_br, now_local
+from core.renderer import render_html
 from scrapers.football import _is_out_of_plan
 from scrapers.weather import _rain_summary, _rain_window, _rains_most_of_day
 
@@ -212,7 +211,11 @@ def test_filtro_alcanca_a_secao_local():
 # --------------------------------------------------------------------------- fallback do LLM
 
 # Vale testar porque é o caminho que roda no pior dia: em 01/07/2026 as três tentativas do Gemini
-# falharam e o fallback foi realmente enviado — com os asteriscos de Markdown do item 4.4.
+# falharam e o fallback foi realmente publicado.
+
+
+def _secoes(jornal: dict) -> dict[str, list[dict]]:
+    return {section["id"]: section["entries"] for section in jornal["sections"]}
 
 
 def _payload_completo() -> dict:
@@ -234,45 +237,42 @@ def _payload_completo() -> dict:
     }
 
 
-def test_fallback_atravessa_o_sanitizador_intacto():
-    # É a razão de ser do texto puro: a versão antiga usava asteriscos de Markdown mas era
-    # enviada como HTML, então os asteriscos apareciam literalmente na mensagem.
-    texto = _fallback_journal(_payload_completo(), None)
-    assert sanitize_html(texto) == texto.strip()
-
-
 def test_fallback_nao_usa_marcacao():
-    texto = _fallback_journal(_payload_completo(), None)
-    assert "*" not in texto
-    assert "<" not in texto
+    # O contrato do renderer é texto puro nas entradas: toda formatação é feita na página.
+    entradas = [entry for entries in _secoes(_fallback_journal(_payload_completo())).values() for entry in entries]
+    for entry in entradas:
+        assert "*" not in entry["text"]
+        assert "<" not in entry["text"]
 
 
-def test_fallback_traz_data_e_secoes_com_dado():
-    texto = _fallback_journal(_payload_completo(), None)
-    assert format_date_pt_br(now_local()) in texto
-    for esperado in ("CLIMA", "ECONOMIA", "IDEIAS DE INVESTIMENTO", "MUNDO", "R$ 5,08 (+0,04%)"):
-        assert esperado in texto
+def test_fallback_traz_as_secoes_com_dado():
+    secoes = _secoes(_fallback_journal(_payload_completo()))
+    assert set(secoes) == {"clima", "economia", "investimentos", "mundo"}
+    assert any("R$ 5,08 (+0,04%)" == entry["text"] for entry in secoes["economia"])
 
 
 def test_fallback_omite_secao_que_falhou():
     payload = _payload_completo()
     payload["finance"] = {"_error": "sem cotação"}
     payload["investments"] = {"_error": "BCB fora do ar"}
-    texto = _fallback_journal(payload, None)
-    assert "ECONOMIA" not in texto
-    assert "IDEIAS DE INVESTIMENTO" not in texto
-    assert "CLIMA" in texto
+    secoes = _secoes(_fallback_journal(payload))
+    assert "economia" not in secoes
+    assert "investimentos" not in secoes
+    assert "clima" in secoes
 
 
-def test_fallback_com_payload_vazio_ainda_produz_cabecalho():
-    texto = _fallback_journal({}, None)
-    assert format_date_pt_br(now_local()) in texto
-    assert "fallback" in texto
+def test_fallback_com_payload_vazio_ainda_produz_pagina():
+    jornal = _fallback_journal({})
+    assert jornal["sections"] == []
+    assert jornal["degraded"] is True
+    pagina = render_html(jornal, date_header="Sexta-feira, 12 de Setembro de 2026", generated_at="05:55")
+    assert "Sexta-feira, 12 de Setembro de 2026" in pagina
+    assert "fallback" in pagina.lower()
 
 
 def test_fallback_nao_quebra_com_ativo_sem_display():
     payload = {"finance": {"usd_brl": {"bid": 5.08}}, "weather": {"city": "Curitiba"}}
-    assert _fallback_journal(payload, None)
+    assert _fallback_journal(payload)["sections"] == []
 
 
 def test_filtro_ignora_jornal_antigo_demais():

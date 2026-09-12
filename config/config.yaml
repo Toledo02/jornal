@@ -161,6 +161,14 @@ football:
         - "tudo sobre"
         - "na globo, sportv"
 
+presentation:
+  # Quantos itens cada seção de notícia publica. A página não tem o teto de 4096 caracteres do
+  # Telegram, que era o que limitava isto a 3 — os scrapers já entregam até 15 candidatos.
+  # Subir demais deixa a anti-repetição mais agressiva: cada item publicado vira nome próprio
+  # registrado no histórico de amanhã.
+  items_per_news_section: 5
+  max_github_repos: 5
+
 history:
   file: "history.json"
   # Janela do histórico. Dias mais antigos são descartados a cada gravação, então o arquivo

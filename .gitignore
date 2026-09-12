@@ -12,6 +12,7 @@ env/
 
 # Runtime data
 logs/
+site/
 
 # IDE
 .vscode/
