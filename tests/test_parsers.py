@@ -120,11 +120,26 @@ def test_render_html_respeita_a_ordem_das_secoes():
     assert pagina.index('id="clima"') < pagina.index('id="mundo"')
 
 
-def test_render_html_usa_titulo_e_emoji_do_codigo():
+def test_render_html_usa_titulo_e_icone_do_codigo():
+    # O emoji da seção vira SVG (nenhum emoji de fonte no cabeçalho); o título continua texto.
     pagina = _render(JORNAL)
-    for section_id, emoji, titulo in SECTIONS:
+    for section_id, _, titulo in SECTIONS:
         if section_id in {"clima", "mundo"}:
-            assert emoji in pagina and titulo in pagina
+            assert titulo in pagina
+    assert pagina.count("<svg") >= 2
+
+
+def test_render_html_troca_emoji_de_clima_por_svg_inline():
+    # "⛅" vem embutido no texto (Python monta a string); a página não deve emitir o emoji cru.
+    pagina = _render(JORNAL)
+    assert "⛅" not in pagina
+    assert 'class="icon-inline"' in pagina
+
+
+def test_render_html_nao_afeta_emoji_desconhecido():
+    # Emoji fora do conjunto conhecido (clima/setas/seção) não tem ícone — passa intocado.
+    pagina = _render({"sections": [{"id": "mundo", "entries": [{"text": "Alerta 🚨 no aeroporto"}]}]})
+    assert "🚨" in pagina
 
 
 def test_render_html_avisa_quando_degradado():
