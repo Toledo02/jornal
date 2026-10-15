@@ -35,13 +35,13 @@ DEFAULT_JOURNALS_IN_PROMPT = 3
 # Janela padrão para considerar um destaque "já mostrado".
 DEFAULT_REPEAT_WINDOW_DAYS = 7
 
-# Janela do rodízio de ações/ETFs em IDEIAS DE INVESTIMENTO. Pool menor que o de jogos, então a
+# Janela do rodízio de ações/ETFs em INVESTIMENTOS. Pool menor que o de jogos, então a
 # janela também é menor.
 DEFAULT_STOCK_REPEAT_WINDOW_DAYS = 3
 
-# Janela do rodízio da "ideia do dia" de investimento. Pool de ~5 frases, então uma janela curta
-# já garante variação sem esgotar as opções.
-DEFAULT_INVESTMENT_IDEA_WINDOW_DAYS = 5
+# Rótulo da entrada que o modelo escreve em INVESTIMENTOS; o prompt manda usá-lo literalmente e
+# `extract_insight` o procura para guardar no histórico.
+INSIGHT_LABEL = "Insight do dia"
 
 
 def load(path: Path) -> dict[str, Any]:
@@ -286,10 +286,6 @@ def extract_highlights(payload: dict[str, Any]) -> dict[str, list[str]]:
     if tickers:
         highlights["stocks"] = tickers
 
-    idea = investments.get("idea_of_the_day") or {}
-    if idea.get("id"):
-        highlights["investment_idea"] = [idea["id"]]
-
     return highlights
 
 
@@ -370,7 +366,7 @@ def apply_stock_rotation(
     history: dict[str, Any],
     window_days: int = DEFAULT_STOCK_REPEAT_WINDOW_DAYS,
 ) -> None:
-    """Troca as ações/ETFs de IDEIAS DE INVESTIMENTO para não repetir o mesmo trio todo dia.
+    """Troca as ações/ETFs de INVESTIMENTOS para não repetir o mesmo trio todo dia.
 
     Mesmo princípio do rodízio de ofertas pagas em `apply_repeat_policy`: o scraper devolve um
     pool maior que o exibido, aqui o que já saiu recentemente é removido e o próximo do pool sobe.
@@ -404,33 +400,41 @@ def apply_stock_rotation(
     stocks["candidates"] = chosen
 
 
-def apply_investment_idea(
-    payload: dict[str, Any],
-    history: dict[str, Any],
-    window_days: int = DEFAULT_INVESTMENT_IDEA_WINDOW_DAYS,
-) -> None:
-    """Escolhe a "ideia do dia" de IDEIAS DE INVESTIMENTO: a menos usada nos últimos dias.
+def apply_recent_insights(payload: dict[str, Any], history: dict[str, Any]) -> None:
+    """Põe em `investments.recent_insights` os insights já publicados, para o modelo não repetir.
 
-    Mesma razão do rodízio de jogos e de ações — o modelo compara texto entre dias e compara
-    mal, então a mesma frase voltava toda manhã com outra redação. O `id` da ideia é estável
-    (só os números mudam), então serve de chave. Empate mantém a ordem de `_investment_ideas`
-    (Selic, juro real, poupança, inflação, IPCA+), que já está da mais geral para a mais
-    específica.
+    O insight é escrito pelo modelo, de conhecimento próprio, e sem lista do que já saiu ele
+    volta sempre aos mesmos três temas — e os 3 jornais que vão ao prompt são pouco para isso.
+    Aqui vão todos os do histórico (podado para `retention_days`). O dia de hoje fica de fora:
+    rodar de novo na mesma manhã não deve proibir o insight que já está no ar.
     """
     investments = payload.get("investments")
-    if not isinstance(investments, dict):
+    if not isinstance(investments, dict) or investments.get("_error"):
         return
 
-    ideas = investments.get("ideas") or []
-    if not ideas:
-        return
+    today = now_local().date().isoformat()
+    insights = [
+        text
+        for day in sorted(history)
+        if day < today and isinstance(history[day], dict)
+        for text in (history[day].get("highlights") or {}).get("investment_insight") or []
+    ]
+    if insights:
+        investments["recent_insights"] = insights
 
-    seen = _highlight_counts(history, "investment_idea", window_days)
-    chosen = min(enumerate(ideas), key=lambda pair: (seen.get(pair[1].get("id"), 0), pair[0]))[1]
 
-    investments["idea_of_the_day"] = chosen
-    investments.pop("ideas", None)
-    logger.info("Ideia de investimento do dia: %s", chosen.get("id"))
+def extract_insight(journal: dict[str, Any]) -> dict[str, list[str]]:
+    """O "Insight do dia" publicado, no formato de `highlights`, para o `apply_recent_insights`.
+
+    Sai do jornal gerado e não do payload, porque é o modelo quem escreve o insight.
+    """
+    for section in journal.get("sections") or []:
+        if section.get("id") != "investimentos":
+            continue
+        for entry in section.get("entries") or []:
+            if entry.get("label", "").strip().casefold() == INSIGHT_LABEL.casefold():
+                return {"investment_insight": [entry["text"]]}
+    return {}
 
 
 def record(

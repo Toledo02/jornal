@@ -203,15 +203,7 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
             )
         ),
     )
-    history_store.apply_investment_idea(
-        payload,
-        history,
-        window_days=int(
-            history_cfg.get(
-                "investment_idea_window_days", history_store.DEFAULT_INVESTMENT_IDEA_WINDOW_DAYS
-            )
-        ),
-    )
+    history_store.apply_recent_insights(payload, history)
     history_store.filter_published_items(payload, history, days=journals_in_prompt)
 
     previous = history_store.recent_journals(history, journals_in_prompt)
@@ -255,7 +247,10 @@ async def _run_pipeline(args: argparse.Namespace) -> int:
             now.date(),
             journal_text,
             history_store.extract_metrics(payload),
-            history_store.extract_highlights(payload),
+            {
+                **history_store.extract_highlights(payload),
+                **history_store.extract_insight(journal),
+            },
         )
         history_store.save(history_file, updated, retention_days)
         logger.info("Histórico atualizado (%s dias)", len(updated))

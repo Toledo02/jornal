@@ -183,8 +183,6 @@ history:
   # Por quantos dias uma ação/ETF já destacada em IDEIAS DE INVESTIMENTO continua bloqueada.
   # Pool menor que o de jogos, então a janela também é menor.
   stock_repeat_window_days: 3
-  # Por quantos dias a "ideia do dia" de investimento fica de molho antes de poder repetir.
-  investment_idea_window_days: 5
 
 orchestrator:
   scraper_timeout_seconds: 30

@@ -70,10 +70,20 @@ Rules:
          other stock, fund, cryptocurrency or issuer. This is factual reporting of price and range,
          not a recommendation: never tell the reader to buy or sell that ticker, and never predict
          where its price is going.
-       - Then ONE entry labelled "Ideia do dia" rephrasing "idea_of_the_day.text". You may tighten
-         the wording, but do NOT add, drop or change any number, and do NOT name a specific stock,
-         fund, cryptocurrency, broker or issuer. If "idea_of_the_day" is absent, omit this entry.
-       - Every numeric claim MUST come from "idea_of_the_day", "derived", "indicators" or
+       - Then ONE entry labelled exactly "Insight do dia": one practical insight about personal
+         finance in general, written from your own knowledge — budgeting, debt and credit cards,
+         emergency reserve, compound interest, inflation, how taxes affect investments, retirement,
+         consumption habits, behavioural biases, scams. ONE idea only, well-established and
+         something the reader can apply — not news, not a market forecast, and not a comment on
+         today's numbers. Prefer the specific and non-obvious (a mechanism, a rule of thumb, a
+         common mistake and why it costs money) over platitudes everyone has heard, such as "tenha
+         uma reserva de emergência" or "invista com constância". Do not state legal rates, limits or thresholds (tax brackets, FGC ceiling, exempt
+         amounts): they change and cannot be checked here, so explain the mechanism instead.
+       - "recent_insights", when present, lists the insights already published on previous days.
+         Today's insight MUST be about a different topic from every one of them — the same idea
+         reworded or seen from another angle counts as a repeat.
+       - Apart from obviously illustrative examples in the insight ("quem guarda R$ 100 por
+         mês..."), every numeric claim MUST come from "derived", "indicators" or
          "stocks.candidates" — copy the numbers as formatted there. NEVER compute a yield, a
          projection or a percentage yourself, and never state how much money something would return.
        - Outside of the tickers listed in "stocks.candidates", speak about CLASSES of asset only
@@ -120,11 +130,12 @@ Rules:
    the failure.
 5. LENGTH — the page has no size limit, but it is read at a glance, so density matters:
    - Each news entry is ONE sentence of at most 30 words: the fact stated directly, no filler.
-   - The "Ideia do dia" entry is at most two sentences.
+   - The "Insight do dia" entry is at most two sentences.
    - No introductory entry for a section, no closing remark, no commentary about the journal
      itself, no "vale acompanhar" filler.
-6. Do not invent facts not present in the input data. The only exception is the "historia" section,
-   which uses your own historical knowledge.
+6. Do not invent facts not present in the input data. The only exceptions are the "historia"
+   section, which uses your own historical knowledge, and the "Insight do dia" of investimentos,
+   which uses your own knowledge of personal finance.
 7. ANTI-REPETITION POLICY:
    - The tag <RECENT_JOURNALS> contains the journals of the previous days, each with its date.
      A story may only reappear if it is genuinely new or has evolved since ALL of them.
@@ -134,6 +145,8 @@ Rules:
    - This policy NEVER applies to clima, economia, investimentos, games or historia. Those are
      expected to look similar every day and must ALWAYS be present regardless of yesterday's
      content. Never omit the weather or the exchange rates because they resemble yesterday's.
+     The "Insight do dia" is the one part of them that must not repeat, and its rule is
+     "recent_insights", not <RECENT_JOURNALS>.
 """
 
 # O schema é a trava dura do contrato: o prompt explica o conteúdo, isto garante o formato.
@@ -271,16 +284,12 @@ def _fallback_journal(payload: dict[str, Any]) -> dict[str, Any]:
     investments = payload.get("investments") or {}
     if not investments.get("_error"):
         indicators = investments.get("indicators") or {}
-        idea = investments.get("idea_of_the_day") or {}
         add(
             "investimentos",
             [
-                *(
-                    _entry(entry.get("display"), entry.get("label") or "")
-                    for entry in indicators.values()
-                    if isinstance(entry, dict)
-                ),
-                _entry(idea.get("text"), "Ideia do dia"),
+                _entry(entry.get("display"), entry.get("label") or "")
+                for entry in indicators.values()
+                if isinstance(entry, dict)
             ],
         )
 

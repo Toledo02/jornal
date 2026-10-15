@@ -651,3 +651,28 @@ continua único, às 05:55 — muda só para onde ele escreve.
   `/home/ubuntu`, que é 0750, daria 403), site nginx na :8446 com o cert do Tailscale já existente,
   `JOURNAL_HTML_PATH` e `JOURNAL_URL` no `.env` de lá. `Cache-Control: no-store` para o celular não
   abrir o jornal de ontem. A linha do cron das 05:55 não muda.
+
+## Rodada 7 — insight de finanças no lugar da ideia do dia (15/10/2026)
+
+A "ideia do dia" era uma de ~5 frases sobre os números do dia (Selic, juro real, poupança, inflação,
+IPCA+), em rodízio pela menos usada. Soava aleatória e não ensinava nada: a linha "Referências" já
+mostra os mesmos números. Havia ainda um defeito no desempate — com 5 frases e janela de 5 dias, a
+Selic saía dois dias seguidos a cada ciclo.
+
+- [x] **R7.1 "Insight do dia" escrito pelo modelo.** Uma ideia de finanças pessoais em geral, de
+  conhecimento próprio do Gemini. Saíram `_investment_ideas`, `apply_investment_idea` e
+  `investment_idea_window_days`; a seção passou a se chamar "Investimentos".
+- [x] **R7.2 Anti-repetição do insight.** `extract_insight` ([core/history.py](core/history.py)) lê
+  o insight do jornal gerado e o grava em `highlights.investment_insight`; `apply_recent_insights`
+  manda os dos últimos 30 dias como `investments.recent_insights`, e o prompt exige tema diferente.
+
+### Decisões deliberadas
+
+- **Curso curado foi tentado e descartado no mesmo dia.** Uma sequência de 46 lições no config
+  resolvia a exatidão, mas o pedido era insight solto de finanças, não um currículo diário.
+- **Conteúdo do modelo, com cerca.** É a segunda exceção à regra "não invente fatos", ao lado de
+  `historia`. Para compensar, o prompt proíbe alíquota/limite legal, previsão, ativo específico e
+  recomendação de compra, e pede o não óbvio — o primeiro teste saiu "tenha reserva e invista com
+  constância", que é exatamente o que não vale a leitura.
+- **A lista do que já saiu vem do código, não dos 3 jornais do prompt.** Três dias não seguram um
+  modelo que gravita para os mesmos temas; o custo são ~30 frases curtas no payload.

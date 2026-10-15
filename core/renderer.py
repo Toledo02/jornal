@@ -13,7 +13,7 @@ from typing import Any
 SECTIONS: tuple[tuple[str, str, str], ...] = (
     ("clima", "🌦️", "Clima"),
     ("economia", "💵", "Economia"),
-    ("investimentos", "📈", "Ideias de investimento"),
+    ("investimentos", "📈", "Investimentos"),
     ("tecnologia", "💻", "Tecnologia & Dev"),
     ("mundo", "🌍", "Mundo"),
     ("local", "📍", "Curitiba & Paraná"),

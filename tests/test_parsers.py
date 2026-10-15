@@ -16,7 +16,7 @@ from core.telegram_sender import _split_message
 from core.utils import format_date_pt_br, format_number_pt_br, strip_html
 from scrapers.finance import _invert_variation, _variation_suffix
 from scrapers.gaming import _days_until, _ends_in_label, _worth_usd
-from scrapers.investments import _annualize, _build_stock_candidate, _investment_ideas, _real_rate
+from scrapers.investments import _annualize, _build_stock_candidate, _real_rate
 from scrapers.news_rss import _interleave, _normalize_title
 from scrapers.weather import _rain_summary, _rain_window, _uv_label, _wmo_emoji
 
@@ -427,41 +427,6 @@ def test_annualize_converte_taxa_mensal():
     assert round(_annualize(0.6717), 2) == 8.36
 
 
-def test_investment_ideas_nao_repete_a_comparacao_com_o_cdi():
-    indicadores = {
-        "cdi": {"label": "CDI", "value": 13.9, "display": "13,90% a.a."},
-        "poupanca": {"label": "Poupança", "value": 0.6717, "display": "0,67% a.m."},
-    }
-    derivados = {
-        "poupanca_anual": {
-            "value": 8.36,
-            "display": "8,36% a.a. equivalentes — cerca de 60% do CDI",
-            "percent_of_cdi": 60.0,
-        }
-    }
-    ideia = next(i for i in _investment_ideas(indicadores, derivados) if i["id"] == "poupanca")
-    # Reaproveitar o `display` (que já embute a comparação) repetia "60% do CDI" na mesma frase.
-    # A menção a "100% do CDI" é outra coisa: é o CDB com que a poupança está sendo comparada.
-    assert ideia["text"].count("60% do CDI") == 1
-    assert "8,36% a.a." in ideia["text"]
-
-
-def test_investment_ideas_sem_indicador_nao_inventa_frase():
-    assert _investment_ideas({}, {}) == []
-
-
-def test_investment_ideas_tem_id_estavel():
-    indicadores = {
-        "selic": {"label": "Selic", "value": 14.0, "display": "14,00% a.a."},
-        "cdi": {"label": "CDI", "value": 13.9, "display": "13,90% a.a."},
-        "ipca_12m": {"label": "IPCA", "value": 4.64, "display": "4,64% em 12 meses"},
-    }
-    derivados = {"juro_real": {"value": 8.85, "display": "8,85% a.a. acima da inflação"}}
-    ids = [i["id"] for i in _investment_ideas(indicadores, derivados)]
-    assert ids[:2] == ["selic", "juro_real"]
-    assert "ipca_plus" in ids  # juro real >= 5
-
-
 _PETR4 = {"ticker": "PETR4", "name": "Petrobras", "class": "ação"}
 
 
@@ -615,40 +580,58 @@ def test_stock_rotation_ignora_payload_sem_stocks():
     assert payload == {"investments": {"indicators": {}}}
 
 
-# --------------------------------------------------------------------------- ideia de investimento
+# --------------------------------------------------------------------------- insight do dia
 
 
-def _payload_ideas(ids: list[str]) -> dict:
-    return {"investments": {"ideas": [{"id": i, "text": f"frase {i}"} for i in ids]}}
-
-
-def _historico_com_ideias(ids: list[str], dias_atras: int = 1) -> dict:
+def _historico_com_insight(texto: str, dias_atras: int, hist: dict | None = None) -> dict:
     dia = date.today() - timedelta(days=dias_atras)
-    return history.record({}, dia, "jornal", {}, {"investment_idea": ids})
+    return history.record(hist or {}, dia, "jornal", {}, {"investment_insight": [texto]})
 
 
-def test_investment_idea_escolhe_a_menos_usada():
-    payload = _payload_ideas(["selic", "juro_real", "poupanca"])
-    hist = _historico_com_ideias(["selic"])
-    hist = history.record(hist, date.today() - timedelta(days=2), "j", {}, {"investment_idea": ["juro_real"]})
-    history.apply_investment_idea(payload, hist)
-    assert payload["investments"]["idea_of_the_day"]["id"] == "poupanca"
-    # O pool sai do payload que vai ao modelo.
-    assert "ideas" not in payload["investments"]
-
-
-def test_investment_idea_empate_mantem_a_ordem_do_pool():
-    payload = _payload_ideas(["selic", "juro_real", "poupanca"])
-    history.apply_investment_idea(payload, {})
-    assert payload["investments"]["idea_of_the_day"]["id"] == "selic"
-
-
-def test_investment_idea_registrada_nos_highlights():
-    payload = {"investments": {"idea_of_the_day": {"id": "poupanca", "text": "x"}}}
-    assert history.extract_highlights(payload)["investment_idea"] == ["poupanca"]
-
-
-def test_investment_idea_ignora_payload_sem_ideias():
+def test_recent_insights_vai_ao_payload_em_ordem():
+    hist = _historico_com_insight("segundo", dias_atras=1)
+    hist = _historico_com_insight("primeiro", dias_atras=2, hist=hist)
     payload = {"investments": {"indicators": {}}}
-    history.apply_investment_idea(payload, {})
-    assert payload == {"investments": {"indicators": {}}}
+    history.apply_recent_insights(payload, hist)
+    assert payload["investments"]["recent_insights"] == ["primeiro", "segundo"]
+
+
+def test_recent_insights_ignora_o_de_hoje():
+    # Rodar de novo na mesma manhã não pode proibir o insight que já está no ar.
+    payload = {"investments": {"indicators": {}}}
+    history.apply_recent_insights(payload, _historico_com_insight("de hoje", dias_atras=0))
+    assert "recent_insights" not in payload["investments"]
+
+
+def test_recent_insights_nao_entra_em_secao_que_falhou():
+    payload = {"investments": {"_error": "BCB fora do ar"}}
+    history.apply_recent_insights(payload, _historico_com_insight("x", dias_atras=1))
+    assert payload == {"investments": {"_error": "BCB fora do ar"}}
+
+
+def test_extract_insight_le_o_jornal_gerado():
+    journal = {
+        "sections": [
+            {"id": "historia", "entries": [{"label": "Insight do dia", "text": "não é esta"}]},
+            {
+                "id": "investimentos",
+                "entries": [
+                    {"label": "Referências", "text": "Selic 15,00% a.a."},
+                    {"label": "insight do dia", "text": "Cartão rotativo é a dívida mais cara."},
+                ],
+            },
+        ]
+    }
+    assert history.extract_insight(journal) == {
+        "investment_insight": ["Cartão rotativo é a dívida mais cara."]
+    }
+
+
+def test_extract_insight_sem_insight_nao_grava_nada():
+    assert history.extract_insight({"sections": [{"id": "investimentos", "entries": []}]}) == {}
+
+
+def test_prompt_pede_o_rotulo_que_o_historico_procura():
+    from core.ai_engine import SYSTEM_PROMPT
+
+    assert f'labelled exactly "{history.INSIGHT_LABEL}"' in SYSTEM_PROMPT

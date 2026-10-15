@@ -23,7 +23,7 @@ python main.py                        # pipeline completo (publica a página e a
 python main.py --dry-run              # gera e escreve logs/preview.html, sem publicar nem avisar
 python main.py --no-llm               # só coleta e imprime o payload, sem gastar requisição
 python main.py --only gaming,finance  # subconjunto de scrapers
-python -m pytest -q                   # 137 testes, sem rede
+python -m pytest -q                   # 138 testes, sem rede
 ```
 
 Ao iterar em scrapers use `--no-llm --only <scraper>`: não consome cota do Gemini nem envia mensagem.
@@ -84,7 +84,7 @@ anti-repetição segue escopada às seções de notícia; Clima e Economia são 
 
 **Seções lidas por tópico.** Clima e Investimentos são consultados de relance, não lidos como
 parágrafo — cada fato é uma entrada com seu `label`, e as strings chegam prontas do Python
-(`rain_summary`, `sun_summary`, `uv_summary`, `today_summary`, `idea_of_the_day`). O emoji de
+(`rain_summary`, `sun_summary`, `uv_summary`, `today_summary`). O emoji de
 condição do clima (`_wmo_emoji`, ☀️/⛅/☁️/🌧️/⛈️…) também é montado em Python e não escolhido pelo
 modelo: o mesmo código WMO tem que dar sempre o mesmo ícone. As setas 🔺/🔻 da máxima vêm coladas
 no `vs_ontem` por `enrich_payload`.
@@ -93,15 +93,18 @@ no `vs_ontem` por `enrich_payload`.
 já em pt-BR, e o prompt manda copiá-lo literalmente. Modelo formatando número produz `R$ 0.0034278`,
 e pior: em produção ele chegou a calcular uma variação percentual do IBOVESPA que ninguém pediu.
 
-**A sugestão de investimento não é opinião do modelo.** [investments.py](scrapers/investments.py) lê
-as séries do SGS do Banco Central (Selic, CDI, IPCA, poupança — públicas, sem chave) e calcula em
+**Investimentos: números de Python, insight do modelo.** [investments.py](scrapers/investments.py)
+lê as séries do SGS do Banco Central (Selic, CDI, IPCA, poupança — públicas, sem chave) e calcula em
 Python o juro real (Fisher, não subtração: 13,90 − 4,64 dá 9,26 e o certo é 8,85) e a anualização da
-poupança. `_investment_ideas` monta um pool de ~5 afirmações prontas, cada uma com um `id` estável;
-`core/history.apply_investment_idea` escolhe a menos usada nos últimos dias e a move para
-`idea_of_the_day` (removendo o resto do payload). O modelo só reescreve essa frase — o prompt proíbe
-que produza número, projeção ou rendimento próprio, cite ativo específico, corretora ou emissor.
-Não há mais os bullets de perfil (Conservador/Moderado/Arrojado) nem o disclaimer — foram removidos
-na Rodada 5 por serem sempre iguais / a pedido (uso pessoal).
+poupança. O "Insight do dia" é a exceção deliberada (Rodada 7): o Gemini o escreve de conhecimento
+próprio, sobre finanças pessoais em geral, como faz em `historia`. O prompt pede uma ideia só,
+específica e não óbvia, e proíbe previsão de mercado, ativo/corretora/emissor, recomendação de
+compra e alíquota/limite legal (mudam e não há como conferir). A anti-repetição é por código, porque
+os 3 jornais do prompt são pouco: `extract_insight` tira do jornal gerado a entrada com
+`INSIGHT_LABEL` e a grava em `highlights.investment_insight`; `apply_recent_insights` devolve ao
+payload os dos 30 dias (`recent_insights`). Mudar o rótulo no prompt sem mudar `INSIGHT_LABEL`
+desliga a anti-repetição em silêncio — há teste para isso. Não há bullets de perfil nem disclaimer
+(removidos na Rodada 5, a pedido — uso pessoal).
 
 **Duas anti-repetições, e elas não são intercambiáveis.** A escolha entre uma e outra depende de
 o payload ser igual ou não ao que se publica:

@@ -5,10 +5,9 @@ Por isso a fonte é a série oficial do BCB (SGS, pública e sem chave) e **todo
 acontece aqui, em Python** — juro real, poupança anualizada e a comparação poupança × CDI são
 exatamente o tipo de aritmética que o modelo erra e ninguém confere.
 
-O que vai ao prompt é uma "ideia do dia" já redigida (`idea_of_the_day`), escolhida em Python
-(`core/history.apply_investment_idea`) entre as afirmações prontas de `_investment_ideas` — a
-menos usada nos últimos dias, para não repetir a mesma toda manhã. O modelo só reescreve a frase;
-não inventa número, não calcula rendimento e não recomenda ativo específico.
+O "Insight do dia" da seção não sai daqui: o modelo o escreve de conhecimento próprio, e
+`core/history.apply_recent_insights` só lhe passa os já publicados para não repetir. Este scraper
+entrega os números de referência e os destaques da bolsa.
 """
 
 from __future__ import annotations
@@ -169,82 +168,6 @@ async def _fetch_stocks(pool: list[dict[str, Any]]) -> dict[str, list[float]]:
     return await asyncio.to_thread(_fetch_stock_pool_sync, pool)
 
 
-def _investment_ideas(
-    indicators: dict[str, dict[str, Any]], derived: dict[str, Any]
-) -> list[dict[str, str]]:
-    """Afirmações prontas, com os números já formatados, cada uma com um `id` estável.
-
-    O `id` não muda de um dia para o outro (só os números da frase mudam), então serve de chave
-    para o rodízio em `core/history.apply_investment_idea`. É o mesmo princípio do campo `display`
-    das cotações, aplicado a frases: o modelo só reescreve, nunca produz um número que não esteja
-    aqui.
-    """
-    ideas: list[dict[str, str]] = []
-
-    selic = indicators.get("selic")
-    cdi = indicators.get("cdi")
-    ipca = indicators.get("ipca_12m")
-    juro_real = derived.get("juro_real")
-    poupanca = derived.get("poupanca_anual")
-
-    if selic:
-        ideas.append({
-            "id": "selic",
-            "text": (
-                f"A Selic está em {selic['display']}, então pós-fixados atrelados ao CDI "
-                f"(Tesouro Selic, CDB de liquidez diária) acompanham essa taxa."
-            ),
-        })
-    if cdi and juro_real and ipca:
-        ideas.append({
-            "id": "juro_real",
-            "text": (
-                f"O CDI roda a {cdi['display']} contra uma inflação de {ipca['display']}: sobram "
-                f"{format_number_pt_br(juro_real['value'], 2)}% ao ano de juro real."
-            ),
-        })
-    elif cdi:
-        ideas.append({"id": "cdi", "text": f"O CDI roda a {cdi['display']}."})
-
-    if poupanca:
-        # A partir do valor, não do `display`: aquele já traz a comparação com o CDI embutida e
-        # reaproveitá-lo aqui repetia "60% do CDI" duas vezes na mesma frase.
-        share = poupanca.get("percent_of_cdi")
-        comparison = (
-            f", ou {format_number_pt_br(float(share), 0)}% do CDI — perde de um CDB de 100% do "
-            "CDI com a mesma liquidez"
-            if share
-            else ""
-        )
-        ideas.append({
-            "id": "poupanca",
-            "text": (
-                f"A poupança rende o equivalente a "
-                f"{format_number_pt_br(poupanca['value'], 2)}% a.a.{comparison}."
-            ),
-        })
-
-    if ipca:
-        ideas.append({
-            "id": "inflacao",
-            "text": (
-                f"Qualquer aplicação que renda menos que a inflação ({ipca['display']}) está "
-                "perdendo poder de compra."
-            ),
-        })
-
-    if juro_real and juro_real["value"] >= 5:
-        ideas.append({
-            "id": "ipca_plus",
-            "text": (
-                "Com juro real alto, títulos indexados à inflação (Tesouro IPCA+) travam esse "
-                "ganho real por prazos longos, ao custo de oscilação no meio do caminho."
-            ),
-        })
-
-    return ideas
-
-
 async def fetch(settings) -> ScraperResult:
     section = "investments"
     cfg = settings.get("investments") or {}
@@ -279,21 +202,9 @@ async def fetch(settings) -> ScraperResult:
             error="; ".join(errors) or "nenhum indicador do BCB disponível",
         )
 
-    derived = _derive(indicators)
-    ideas = _investment_ideas(indicators, derived)
-    data: dict[str, Any] = {
-        "indicators": indicators,
-        "derived": derived,
-        # Pool de ideias; `core/history.apply_investment_idea` escolhe uma e a move para
-        # `idea_of_the_day`, removendo o resto antes de o payload chegar ao modelo.
-        "ideas": ideas,
-    }
+    data: dict[str, Any] = {"indicators": indicators, "derived": _derive(indicators)}
 
-    logger.info(
-        "investments: %s indicadores, %s ideias no pool",
-        len(indicators),
-        len(ideas),
-    )
+    logger.info("investments: %s indicadores", len(indicators))
 
     stock_errors: list[str] = []
     stock_pool = cfg.get("stock_pool") or []

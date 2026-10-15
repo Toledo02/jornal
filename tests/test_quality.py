@@ -231,7 +231,6 @@ def _payload_completo() -> dict:
         "finance": {"usd_brl": {"display": "R$ 5,08 (+0,04%)"}},
         "investments": {
             "indicators": {"selic": {"label": "Selic (meta)", "display": "14,00% a.a."}},
-            "idea_of_the_day": {"id": "selic", "text": "A Selic está em 14,00% a.a."},
         },
         "world_news": {"items": [{"title": "Uma notícia"}, {"title": "Outra notícia"}]},
     }
